@@ -216,12 +216,18 @@ This MCP server acts as a bridge between Claude Code and your self-hosted Mem0 A
 
 **Note:** This server does NOT directly access PostgreSQL or Neo4j. It communicates only with the Mem0 API endpoint, which handles all database operations.
 
-## API Endpoints Used
+## Mem0 API Endpoints Used
 
-- `POST /v1/memories/` - Add new memory
-- `GET /v1/memories/?user_id={id}&limit={n}` - Get memories
-- `POST /v1/memories/search/` - Search memories
-- `DELETE /v1/memories/{id}` - Delete memory
+This MCP server uses the following Mem0 API endpoints:
+
+- `POST /v1/memories` - Add new memory
+  - Body: `{"messages": [{"role": "user", "content": "..."}], "user_id": "...", "metadata": {}}`
+- `GET /v1/memories/{user_id}` - Get all memories for a user
+  - Path parameter: user_id
+- `POST /v1/memories/search` - Search memories with semantic search
+  - Body: `{"query": "...", "user_id": "...", "limit": 10}`
+- `DELETE /v1/memories/{memory_id}` - Delete a specific memory
+  - Path parameter: memory_id
 
 ## Troubleshooting
 

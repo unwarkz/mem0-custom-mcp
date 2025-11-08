@@ -211,14 +211,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { user_id, limit } = GetMemoriesSchema.parse(args);
         const userId = user_id || DEFAULT_USER_ID;
         const limitParam = limit || 100;
-        const result = await callMem0API(
-          `/v1/memories/?user_id=${userId}&limit=${limitParam}`
-        );
+        // Note: Mem0 API uses user_id as path parameter, limit is handled by API
+        const result = await callMem0API(`/v1/memories/${userId}`);
+        // Filter by limit on our side since API doesn't support limit parameter
+        const memories = Array.isArray(result) ? result.slice(0, limitParam) : result;
         return {
           content: [
             {
               type: "text",
-              text: `Retrieved ${result.length || 0} memories:\n${JSON.stringify(result, null, 2)}`,
+              text: `Retrieved ${Array.isArray(memories) ? memories.length : 0} memories:\n${JSON.stringify(memories, null, 2)}`,
             },
           ],
         };
