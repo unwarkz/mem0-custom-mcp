@@ -129,28 +129,41 @@ Delete a specific memory by ID.
 
 ## Architecture
 
+This MCP server acts as a bridge between Claude Code and your self-hosted Mem0 API instance:
+
 ```
-┌─────────────────┐
-│  Claude Code    │
-└────────┬────────┘
-         │ MCP stdio
-         │ protocol
-┌────────▼────────────┐
-│ mem0-custom-mcp     │
-│ (This server)       │
-└────────┬────────────┘
-         │ HTTP REST API
-         │
-┌────────▼────────────┐
-│ Self-Hosted Mem0    │
-│ API (10.0.0.1:8888) │
-└─────────────────────┘
-         │
-    ┌────▼─────┐
-    │PostgreSQL│
-    │  Neo4j   │
-    └──────────┘
+┌─────────────────────────┐
+│     Claude Code         │
+└────────────┬────────────┘
+             │ MCP stdio protocol
+             │
+┌────────────▼────────────┐
+│   mem0-custom-mcp       │  ← This MCP server (Node.js)
+│   (MCP wrapper)         │
+└────────────┬────────────┘
+             │ HTTP REST API (http://10.0.0.1:8888)
+             │
+┌────────────▼────────────┐
+│  Self-Hosted Mem0 API   │  ← Mem0 API server (Python/FastAPI)
+│  (10.0.0.1:8888)        │    Handles memory operations
+└────────────┬────────────┘
+             │
+        ┌────┴─────┐
+        │          │
+   ┌────▼───┐  ┌──▼──────┐
+   │PGVector│  │  Neo4j  │  ← Databases managed by Mem0 API
+   │(Vector)│  │ (Graph) │
+   └────────┘  └─────────┘
 ```
+
+**Flow:**
+1. Claude Code calls MCP tools (add_memory, search_memories, etc.)
+2. mem0-custom-mcp receives requests via MCP stdio protocol
+3. mem0-custom-mcp forwards to Mem0 API via HTTP
+4. Mem0 API processes requests and manages PostgreSQL/Neo4j databases
+5. Results flow back through the chain to Claude Code
+
+**Note:** This server does NOT directly access PostgreSQL or Neo4j. It communicates only with the Mem0 API endpoint, which handles all database operations.
 
 ## API Endpoints Used
 
