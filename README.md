@@ -62,8 +62,53 @@ The server is configured via environment variables:
 
 ### Claude Code Configuration
 
-Add to your `.claude.json`:
+You can configure this MCP server at either **user level** (available in all projects) or **project level** (specific project only).
 
+#### Option 1: Using CLI (Recommended)
+
+**User-level (available everywhere):**
+```bash
+claude mcp add mem0 \
+  --scope user \
+  --command node \
+  --arg "/absolute/path/to/mem0-custom-mcp/dist/index.js" \
+  --env MEM0_API_URL=http://10.0.0.1:8888 \
+  --env DEFAULT_USER_ID=default
+```
+
+**Project-level (specific project only):**
+```bash
+cd /path/to/your/project
+claude mcp add mem0 \
+  --scope project \
+  --command node \
+  --arg "/absolute/path/to/mem0-custom-mcp/dist/index.js" \
+  --env MEM0_API_URL=http://10.0.0.1:8888 \
+  --env DEFAULT_USER_ID=default
+```
+
+#### Option 2: Manual Configuration
+
+**User-level** - Edit `~/.claude.json`:
+```json
+{
+  "mcpServers": {
+    "mem0": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/absolute/path/to/mem0-custom-mcp/dist/index.js"
+      ],
+      "env": {
+        "MEM0_API_URL": "http://10.0.0.1:8888",
+        "DEFAULT_USER_ID": "default"
+      }
+    }
+  }
+}
+```
+
+**Project-level** - Edit `.claude.json` in your project root:
 ```json
 {
   "projects": {
@@ -84,6 +129,12 @@ Add to your `.claude.json`:
     }
   }
 }
+```
+
+**Verify installation:**
+```bash
+claude mcp list
+# Should show "mem0" in the list
 ```
 
 ## Development
