@@ -1,0 +1,58 @@
+{
+  "name": "mem0-custom-mcp",
+  "version": "1.0.0",
+  "description": "Custom MCP server for self-hosted Mem0 API instances. Enables Claude Code to connect to your own Mem0 deployment.",
+  "type": "module",
+  "bin": {
+    "mem0-custom-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc && node dist/index.js",
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "mem0",
+    "memory",
+    "claude",
+    "claude-code",
+    "anthropic",
+    "self-hosted",
+    "ai",
+    "llm",
+    "model-context-protocol"
+  ],
+  "author": "Essam Masoudy <emasoudy@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/emasoudy/mem0-custom-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/emasoudy/mem0-custom-mcp/issues"
+  },
+  "homepage": "https://github.com/emasoudy/mem0-custom-mcp#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.6",
+    "typescript": "^5.7.3"
+  }
+}

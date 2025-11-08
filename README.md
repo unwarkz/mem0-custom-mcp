@@ -1,0 +1,223 @@
+# Mem0 Custom MCP Server
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue)](https://www.typescriptlang.org/)
+[![MCP Protocol](https://img.shields.io/badge/MCP-stdio-purple)](https://modelcontextprotocol.io/)
+
+A custom Model Context Protocol (MCP) server that connects to self-hosted Mem0 API instances. Enables Claude Code to use your own Mem0 deployment for memory management.
+
+## Why This Exists
+
+The official `@mem0/mcp-server` and community `@pinkpixel/mem0-mcp` packages only support:
+- Mem0's cloud platform (requires `MEM0_API_KEY`)
+- Supabase backend
+- Local storage
+
+**Neither supports connecting to custom self-hosted Mem0 API endpoints.**
+
+This custom MCP server bridges that gap by providing a wrapper around your self-hosted Mem0 API.
+
+## Features
+
+- ✅ Connects to self-hosted Mem0 API at custom endpoints
+- ✅ Implements MCP stdio protocol for Claude Code integration
+- ✅ Supports all core Mem0 operations:
+  - `add_memory` - Store new memories
+  - `search_memories` - Semantic search through memories
+  - `get_memories` - Retrieve all memories for a user
+  - `delete_memory` - Delete specific memories
+- ✅ Environment variable configuration
+- ✅ Full TypeScript implementation with type safety
+
+## Installation
+
+### From GitHub (Recommended for now)
+
+```bash
+# Clone the repository
+git clone https://github.com/emasoudy/mem0-custom-mcp.git
+cd mem0-custom-mcp
+
+# Install dependencies
+npm install
+
+# Build the project
+npm run build
+```
+
+### From npm (Future - when published)
+
+```bash
+# This will be available after npm publish
+npm install -g mem0-custom-mcp
+```
+
+## Configuration
+
+The server is configured via environment variables:
+
+- `MEM0_API_URL` - Your Mem0 API endpoint (default: `http://10.0.0.1:8888`)
+- `DEFAULT_USER_ID` - Default user ID for memory operations (default: `default`)
+
+### Claude Code Configuration
+
+Add to your `.claude.json`:
+
+```json
+{
+  "projects": {
+    "your-project-path": {
+      "mcpServers": {
+        "mem0": {
+          "type": "stdio",
+          "command": "node",
+          "args": [
+            "/absolute/path/to/mem0-custom-mcp/dist/index.js"
+          ],
+          "env": {
+            "MEM0_API_URL": "http://10.0.0.1:8888",
+            "DEFAULT_USER_ID": "default"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+## Development
+
+- `npm run build` - Compile TypeScript to JavaScript
+- `npm run dev` - Build and run the server
+- `npm start` - Run the compiled server
+
+## Available Tools
+
+### add_memory
+
+Store a new memory in Mem0.
+
+**Parameters:**
+- `content` (required) - The content to store
+- `user_id` (optional) - User ID (defaults to env DEFAULT_USER_ID)
+- `metadata` (optional) - Additional metadata object
+
+### search_memories
+
+Search memories using semantic search.
+
+**Parameters:**
+- `query` (required) - Search query string
+- `user_id` (optional) - User ID (defaults to env DEFAULT_USER_ID)
+- `limit` (optional) - Maximum results (default: 10)
+
+### get_memories
+
+Retrieve all memories for a user.
+
+**Parameters:**
+- `user_id` (optional) - User ID (defaults to env DEFAULT_USER_ID)
+- `limit` (optional) - Maximum results (default: 100)
+
+### delete_memory
+
+Delete a specific memory by ID.
+
+**Parameters:**
+- `memory_id` (required) - ID of the memory to delete
+
+## Architecture
+
+```
+┌─────────────────┐
+│  Claude Code    │
+└────────┬────────┘
+         │ MCP stdio
+         │ protocol
+┌────────▼────────────┐
+│ mem0-custom-mcp     │
+│ (This server)       │
+└────────┬────────────┘
+         │ HTTP REST API
+         │
+┌────────▼────────────┐
+│ Self-Hosted Mem0    │
+│ API (10.0.0.1:8888) │
+└─────────────────────┘
+         │
+    ┌────▼─────┐
+    │PostgreSQL│
+    │  Neo4j   │
+    └──────────┘
+```
+
+## API Endpoints Used
+
+- `POST /v1/memories/` - Add new memory
+- `GET /v1/memories/?user_id={id}&limit={n}` - Get memories
+- `POST /v1/memories/search/` - Search memories
+- `DELETE /v1/memories/{id}` - Delete memory
+
+## Troubleshooting
+
+### Server won't start
+
+Check debug logs in `~/.claude/debug/` for error messages.
+
+Common issues:
+- Mem0 API not accessible (check VPN connection)
+- Invalid endpoint URL
+- Port conflicts
+
+### Connection timeout
+
+Increase MCP timeout:
+```bash
+export MCP_TIMEOUT=60000  # 60 seconds
+```
+
+### Tool errors
+
+Verify your Mem0 API is running:
+```bash
+curl http://10.0.0.1:8888/health
+```
+
+## Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+### Development
+
+```bash
+# Clone and setup
+git clone https://github.com/emasoudy/mem0-custom-mcp.git
+cd mem0-custom-mcp
+npm install
+
+# Make changes to src/index.ts
+# Build and test
+npm run build
+npm run dev  # Build and run
+```
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for version history.
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+## Acknowledgments
+
+- Built for the [Model Context Protocol](https://modelcontextprotocol.io/)
+- Works with [Mem0](https://mem0.ai/) self-hosted instances
+- Designed for [Claude Code](https://code.claude.com/)
+
+## Support
+
+- 🐛 [Report bugs](https://github.com/emasoudy/mem0-custom-mcp/issues)
+- 💡 [Request features](https://github.com/emasoudy/mem0-custom-mcp/issues)
+- 📖 [Read the docs](https://github.com/emasoudy/mem0-custom-mcp#readme)
