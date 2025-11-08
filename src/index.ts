@@ -9,7 +9,7 @@ import {
 import { z } from "zod";
 
 // Environment configuration
-const MEM0_API_URL = process.env.MEM0_API_URL || "http://10.0.0.1:8888";
+const MEM0_API_URL = process.env.MEM0_API_URL || "http://localhost:8888";
 const DEFAULT_USER_ID = process.env.DEFAULT_USER_ID || "default";
 
 // Zod schemas for input validation

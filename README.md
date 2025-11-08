@@ -57,8 +57,13 @@ npm install -g mem0-custom-mcp
 
 The server is configured via environment variables:
 
-- `MEM0_API_URL` - Your Mem0 API endpoint (default: `http://10.0.0.1:8888`)
+- `MEM0_API_URL` - Your Mem0 API endpoint (default: `http://localhost:8888`)
 - `DEFAULT_USER_ID` - Default user ID for memory operations (default: `default`)
+
+**Example configurations:**
+- Local: `http://localhost:8888`
+- Docker: `http://host.docker.internal:8888`
+- Remote/VPN: `http://your-server-ip:8888`
 
 ### Claude Code Configuration
 
@@ -72,7 +77,7 @@ claude mcp add mem0 \
   --scope user \
   --command node \
   --arg "/absolute/path/to/mem0-custom-mcp/dist/index.js" \
-  --env MEM0_API_URL=http://10.0.0.1:8888 \
+  --env MEM0_API_URL=http://localhost:8888 \
   --env DEFAULT_USER_ID=default
 ```
 
@@ -83,7 +88,7 @@ claude mcp add mem0 \
   --scope project \
   --command node \
   --arg "/absolute/path/to/mem0-custom-mcp/dist/index.js" \
-  --env MEM0_API_URL=http://10.0.0.1:8888 \
+  --env MEM0_API_URL=http://localhost:8888 \
   --env DEFAULT_USER_ID=default
 ```
 
@@ -100,7 +105,7 @@ claude mcp add mem0 \
         "/absolute/path/to/mem0-custom-mcp/dist/index.js"
       ],
       "env": {
-        "MEM0_API_URL": "http://10.0.0.1:8888",
+        "MEM0_API_URL": "http://localhost:8888",
         "DEFAULT_USER_ID": "default"
       }
     }
@@ -121,7 +126,7 @@ claude mcp add mem0 \
             "/absolute/path/to/mem0-custom-mcp/dist/index.js"
           ],
           "env": {
-            "MEM0_API_URL": "http://10.0.0.1:8888",
+            "MEM0_API_URL": "http://localhost:8888",
             "DEFAULT_USER_ID": "default"
           }
         }
@@ -192,11 +197,11 @@ This MCP server acts as a bridge between Claude Code and your self-hosted Mem0 A
 │   mem0-custom-mcp       │  ← This MCP server (Node.js)
 │   (MCP wrapper)         │
 └────────────┬────────────┘
-             │ HTTP REST API (http://10.0.0.1:8888)
+             │ HTTP REST API (localhost:8888 or custom URL)
              │
 ┌────────────▼────────────┐
 │  Self-Hosted Mem0 API   │  ← Mem0 API server (Python/FastAPI)
-│  (10.0.0.1:8888)        │    Handles memory operations
+│  (your-server:8888)     │    Handles memory operations
 └────────────┬────────────┘
              │
         ┌────┴─────┐
@@ -251,7 +256,16 @@ export MCP_TIMEOUT=60000  # 60 seconds
 
 Verify your Mem0 API is running:
 ```bash
-curl http://10.0.0.1:8888/health
+# For local deployment
+curl http://localhost:8888/health
+
+# For remote/VPN deployment
+curl http://your-server-ip:8888/health
+```
+
+Expected response:
+```json
+{"status":"ok","db_connected":true,"stores":{"vector":"postgresql","graph":"neo4j"}}
 ```
 
 ## Contributing
