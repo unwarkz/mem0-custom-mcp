@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-11-09
+
+### Added
+- **120-second timeout** for Mem0 API requests using AbortController
+  - Prevents premature timeout failures when Mem0 API is processing memories
+  - Accommodates OpenAI API calls, LLM processing, and database operations
+  - Typical memory creation takes 30-60 seconds with GPT-5-mini
+
+### Changed
+- Improved error handling for slow API responses
+- Better timeout management to handle long-running memory operations
+
+### Fixed
+- Fixed "fetch failed" errors when Mem0 API takes longer than default timeout
+- Resolved connection failures during memory creation with complex entity extraction
+
 ## [1.0.0] - 2025-11-08
 
 ### Added
@@ -30,4 +46,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - User-configurable via environment variables
 - Production-ready TypeScript codebase
 
-[1.0.0]: https://github.com/YOUR_USERNAME/mem0-custom-mcp/releases/tag/v1.0.0
+[1.1.0]: https://github.com/emasoudy/mem0-custom-mcp/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/emasoudy/mem0-custom-mcp/releases/tag/v1.0.0

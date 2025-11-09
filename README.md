@@ -29,6 +29,7 @@ This custom MCP server bridges that gap by providing a wrapper around your self-
   - `delete_memory` - Delete specific memories
 - ✅ Environment variable configuration
 - ✅ Full TypeScript implementation with type safety
+- ✅ **120-second timeout** for slow Mem0 API responses (handles LLM processing delays)
 
 ## Installation
 
@@ -247,9 +248,16 @@ Common issues:
 
 ### Connection timeout
 
-Increase MCP timeout:
-```bash
-export MCP_TIMEOUT=60000  # 60 seconds
+The MCP server has a built-in **120-second timeout** for Mem0 API requests. This accommodates the time needed for:
+- OpenAI API calls to generate embeddings
+- LLM processing to extract entities and relationships
+- Database operations (PostgreSQL + Neo4j)
+
+Typical memory creation takes 30-60 seconds when using GPT-5-mini.
+
+If you need to adjust the timeout, modify `src/index.ts` line 59:
+```typescript
+const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minutes
 ```
 
 ### Tool errors

@@ -54,7 +54,12 @@ async function callMem0API(
   }
 
   try {
-    const response = await fetch(url, options);
+    // Create AbortController with 2 minute timeout for slow Mem0 API responses
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minutes
+
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errorText = await response.text();
