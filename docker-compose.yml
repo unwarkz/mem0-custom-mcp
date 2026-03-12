@@ -1,0 +1,12 @@
+services:
+  mem0-custom-mcp:
+    build: .
+    image: mem0-custom-mcp
+    env_file:
+      - .env
+    environment:
+      - MEM0_API_URL=${MEM0_API_URL:-http://host.docker.internal:8888}
+      - DEFAULT_USER_ID=${DEFAULT_USER_ID:-default}
+    stdin_open: true
+    tty: false
+    restart: unless-stopped
