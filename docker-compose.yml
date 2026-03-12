@@ -1,7 +1,6 @@
 services:
   mem0-custom-mcp:
-    build: .
-    image: mem0-custom-mcp
+    image: ghcr.io/unwarkz/mem0-custom-mcp:latest
     env_file:
       - .env
     environment:
