@@ -22,14 +22,16 @@ This custom MCP server bridges that gap by providing a wrapper around your self-
 
 - ✅ Connects to self-hosted Mem0 API at custom endpoints
 - ✅ Implements MCP stdio protocol for Claude Code integration
-- ✅ Supports all core Mem0 operations:
-  - `add_memory` - Store new memories
-  - `search_memories` - Semantic search through memories
-  - `get_memories` - Retrieve all memories for a user
-  - `delete_memory` - Delete specific memories
+- ✅ Full coverage of all mem0 REST API endpoints:
+  - Memory CRUD: `add_memory`, `get_memories`, `get_memory`, `update_memory`, `delete_memory`, `delete_all_memories`
+  - Search: `search_memories` (semantic / vector search)
+  - History & reset: `get_memory_history`, `reset_memories`
+  - Config & health: `get_health`, `get_config`, `switch_provider`, `configure`
+- ✅ Supports `user_id`, `agent_id`, and `run_id` scope identifiers on all relevant operations
 - ✅ Environment variable configuration
 - ✅ Full TypeScript implementation with type safety
 - ✅ **120-second timeout** for slow Mem0 API responses (handles LLM processing delays)
+- ✅ Proper MCP error types (`McpError` / `ErrorCode`) for standards-compliant error handling
 
 ## Installation
 
@@ -58,8 +60,37 @@ npm install -g mem0-custom-mcp
 
 The server is configured via environment variables:
 
-- `MEM0_API_URL` - Your Mem0 API endpoint (default: `http://localhost:8888`)
-- `DEFAULT_USER_ID` - Default user ID for memory operations (default: `default`)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MEM0_API_URL` | `http://localhost:8888` | URL of your self-hosted Mem0 API |
+| `DEFAULT_USER_ID` | `default` | Fallback user ID when none is supplied in a tool call |
+| `MEM0_BEARER_TOKEN` | _(unset)_ | If set, sent as `Authorization: Bearer <token>` on every HTTP request to mem0 |
+| `MCP_AUTH_TOKEN` | _(unset)_ | If set, every MCP tool call must include a matching token in `_meta.auth_token`; calls without it are rejected with `Unauthorized` |
+
+**`MEM0_BEARER_TOKEN`** — authenticate this MCP server's requests to the mem0 backend.
+
+**`MCP_AUTH_TOKEN`** — protect this MCP server from unauthorised callers. When enabled, the calling MCP client must pass the token in `_meta`:
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "get_health",
+    "arguments": {},
+    "_meta": { "auth_token": "your-secret" }
+  }
+}
+```
+
+### Logging
+
+All log entries go to **stderr** as newline-delimited JSON:
+```json
+{"ts":"2026-03-13T12:00:00.000Z","level":"INFO","message":"tool call","data":{"tool":"add_memory","args":{...}}}
+{"ts":"2026-03-13T12:00:00.100Z","level":"INFO","message":"mem0 request","data":{"method":"POST","url":"/v1/memories/","body":{...}}}
+{"ts":"2026-03-13T12:00:01.200Z","level":"INFO","message":"mem0 response","data":{"method":"POST","url":"/v1/memories/","status":200,"elapsed":1100}}
+```
+
+> **Why stderr?** In stdio MCP mode stdout carries the JSON-RPC protocol stream. Writing arbitrary bytes to stdout would corrupt the protocol. Most container runtimes (Docker, Kubernetes, systemd) surface stderr in the same log stream as stdout.
 
 **Example configurations:**
 - Local: `http://localhost:8888`
@@ -153,36 +184,100 @@ claude mcp list
 
 ### add_memory
 
-Store a new memory in Mem0.
+Store new memories extracted from a message in Mem0.
 
 **Parameters:**
-- `content` (required) - The content to store
-- `user_id` (optional) - User ID (defaults to env DEFAULT_USER_ID)
-- `metadata` (optional) - Additional metadata object
-
-### search_memories
-
-Search memories using semantic search.
-
-**Parameters:**
-- `query` (required) - Search query string
-- `user_id` (optional) - User ID (defaults to env DEFAULT_USER_ID)
-- `limit` (optional) - Maximum results (default: 10)
+- `content` (required) - The content to remember
+- `user_id` (optional) - User ID (defaults to `DEFAULT_USER_ID` env var)
+- `agent_id` (optional) - Agent ID scope
+- `run_id` (optional) - Run / session ID scope
+- `metadata` (optional) - Additional metadata key-value pairs
 
 ### get_memories
 
-Retrieve all memories for a user.
+Retrieve all memories for a user / agent / run.
 
 **Parameters:**
-- `user_id` (optional) - User ID (defaults to env DEFAULT_USER_ID)
-- `limit` (optional) - Maximum results (default: 100)
+- `user_id` (optional) - User ID (defaults to `DEFAULT_USER_ID` env var)
+- `agent_id` (optional) - Filter by agent ID
+- `run_id` (optional) - Filter by run/session ID
+
+### get_memory
+
+Retrieve a single memory by its ID.
+
+**Parameters:**
+- `memory_id` (required) - Memory ID
+
+### search_memories
+
+Semantic search across memories.
+
+**Parameters:**
+- `query` (required) - Search query
+- `user_id` (optional) - Scope to user ID (defaults to `DEFAULT_USER_ID` env var)
+- `agent_id` (optional) - Scope to agent ID
+- `run_id` (optional) - Scope to run/session ID
+- `filters` (optional) - Additional metadata filters
+- `limit` (optional) - Max results (default: 10)
+
+### update_memory
+
+Update the text content of an existing memory.
+
+**Parameters:**
+- `memory_id` (required) - ID of the memory to update
+- `data` (required) - New text content for the memory
+
+### get_memory_history
+
+Get the change history of a memory.
+
+**Parameters:**
+- `memory_id` (required) - Memory ID
 
 ### delete_memory
 
 Delete a specific memory by ID.
 
 **Parameters:**
-- `memory_id` (required) - ID of the memory to delete
+- `memory_id` (required) - Memory ID to delete
+
+### delete_all_memories
+
+Delete all memories for a given user / agent / run.
+
+**Parameters:**
+- `user_id` (optional) - Delete memories for this user ID (defaults to `DEFAULT_USER_ID` env var)
+- `agent_id` (optional) - Delete memories for this agent ID
+- `run_id` (optional) - Delete memories for this run/session ID
+
+### reset_memories
+
+Reset (wipe) all memories in the store. No parameters.
+
+### get_health
+
+Check the health and current LLM configuration of the Mem0 service. No parameters.
+
+### get_config
+
+Get the current Mem0 service configuration (LLM provider, embedder, vector store, graph store). No parameters.
+
+### switch_provider
+
+Switch the LLM provider used by the Mem0 service on the fly (no service restart required).
+
+**Parameters:**
+- `provider` (required) - One of: `gemini` | `openrouter` | `nvidia` | `qwen`
+- `model` (optional) - Model override (e.g. `gemini/gemini-3.1-flash-lite-preview`, `anthropic/claude-sonnet-4-6`)
+
+### configure
+
+Replace the full mem0 Memory configuration (advanced use).
+
+**Parameters:**
+- `config` (required) - Full mem0 configuration object
 
 ## Architecture
 
@@ -208,7 +303,7 @@ This MCP server acts as a bridge between Claude Code and your self-hosted Mem0 A
         ┌────┴─────┐
         │          │
    ┌────▼───┐  ┌──▼──────┐
-   │PGVector│  │  Neo4j  │  ← Databases managed by Mem0 API
+   │Qdrant  │  │  Neo4j  │  ← Databases managed by Mem0 API
    │(Vector)│  │ (Graph) │
    └────────┘  └─────────┘
 ```
@@ -217,23 +312,30 @@ This MCP server acts as a bridge between Claude Code and your self-hosted Mem0 A
 1. Claude Code calls MCP tools (add_memory, search_memories, etc.)
 2. mem0-custom-mcp receives requests via MCP stdio protocol
 3. mem0-custom-mcp forwards to Mem0 API via HTTP
-4. Mem0 API processes requests and manages PostgreSQL/Neo4j databases
+4. Mem0 API processes requests and manages Qdrant/Neo4j databases
 5. Results flow back through the chain to Claude Code
 
-**Note:** This server does NOT directly access PostgreSQL or Neo4j. It communicates only with the Mem0 API endpoint, which handles all database operations.
+**Note:** This server does NOT directly access Qdrant or Neo4j. It communicates only with the Mem0 API endpoint, which handles all database operations.
 
 ## Mem0 API Endpoints Used
 
-This MCP server uses the following Mem0 API endpoints:
+All endpoints are called with the `/v1/` prefix:
 
-- `POST /v1/memories` - Add new memory
-  - Body: `{"messages": [{"role": "user", "content": "..."}], "user_id": "...", "metadata": {}}`
-- `GET /v1/memories/{user_id}` - Get all memories for a user
-  - Path parameter: user_id
-- `POST /v1/memories/search` - Search memories with semantic search
-  - Body: `{"query": "...", "user_id": "...", "limit": 10}`
-- `DELETE /v1/memories/{memory_id}` - Delete a specific memory
-  - Path parameter: memory_id
+| Tool | Method | Endpoint |
+|------|--------|----------|
+| `add_memory` | POST | `/v1/memories/` |
+| `get_memories` | GET | `/v1/memories/{user_id}` |
+| `get_memory` | GET | `/v1/memories/{memory_id}` |
+| `search_memories` | POST | `/v1/memories/search/` |
+| `update_memory` | PUT | `/v1/memories/{memory_id}` |
+| `get_memory_history` | GET | `/v1/memories/{memory_id}/history` |
+| `delete_memory` | DELETE | `/v1/memories/{memory_id}` |
+| `delete_all_memories` | DELETE | `/v1/memories?user_id=...` |
+| `reset_memories` | POST | `/v1/reset` |
+| `get_health` | GET | `/v1/health` |
+| `get_config` | GET | `/v1/config` |
+| `switch_provider` | POST | `/v1/config/switch` |
+| `configure` | POST | `/v1/configure` |
 
 ## Troubleshooting
 
@@ -249,15 +351,15 @@ Common issues:
 ### Connection timeout
 
 The MCP server has a built-in **120-second timeout** for Mem0 API requests. This accommodates the time needed for:
-- OpenAI API calls to generate embeddings
+- LLM API calls to generate embeddings
 - LLM processing to extract entities and relationships
-- Database operations (PostgreSQL + Neo4j)
+- Database operations (Qdrant + Neo4j)
 
-Typical memory creation takes 30-60 seconds when using GPT-5-mini.
+Typical memory creation takes 30-60 seconds when using a hosted LLM.
 
-If you need to adjust the timeout, modify `src/index.ts` line 59:
+If you need to adjust the timeout, modify `src/index.ts`:
 ```typescript
-const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minutes
+const timeoutId = setTimeout(() => controller.abort(), 120_000); // 2 minutes
 ```
 
 ### Tool errors
@@ -273,7 +375,7 @@ curl http://your-server-ip:8888/health
 
 Expected response:
 ```json
-{"status":"ok","db_connected":true,"stores":{"vector":"postgresql","graph":"neo4j"}}
+{"status": "ok", "provider": "gemini", "model": "gemini/gemini-3.1-flash-lite-preview", "embedder": "models/gemini-embedding-2-preview", "dims": 1536}
 ```
 
 ## Contributing

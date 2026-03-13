@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-03-13
+
+### Added
+- **Full mem0 API coverage** — 13 tools covering every endpoint in the self-hosted Mem0 service:
+  - `get_memory` — retrieve a single memory by ID (`GET /v1/memories/{id}`)
+  - `update_memory` — update memory text content (`PUT /v1/memories/{id}`)
+  - `get_memory_history` — change history for a memory (`GET /v1/memories/{id}/history`)
+  - `delete_all_memories` — bulk-delete by user/agent/run (`DELETE /v1/memories?user_id=...`)
+  - `reset_memories` — wipe entire memory store (`POST /v1/reset`)
+  - `get_health` — service health & current LLM info (`GET /v1/health`)
+  - `get_config` — current configuration (`GET /v1/config`)
+  - `switch_provider` — hot-swap LLM provider (`POST /v1/config/switch`)
+  - `configure` — full mem0 config replacement (`POST /v1/configure`)
+- **`agent_id` and `run_id` scope support** on `add_memory`, `get_memories`, `search_memories`, and `delete_all_memories`
+- **`filters` parameter** on `search_memories` for metadata filtering
+- **`MEM0_BEARER_TOKEN` env var** — when set, sent as `Authorization: Bearer <token>` on every HTTP request to the mem0 backend
+- **`MCP_AUTH_TOKEN` env var** — when set, every MCP tool call must supply a matching token in `_meta.auth_token`; unmatched calls are rejected with `Unauthorized`
+- **Structured JSON logging to stderr** — newline-delimited JSON log entries (with `ts`, `level`, `message`, `data`) for: server startup, every incoming tool call, every outgoing HTTP request, every HTTP response (with elapsed ms), and every error
+
+### Changed
+- Updated `@modelcontextprotocol/sdk` from `^1.0.4` to `^1.27.1`
+- Replaced generic `Error` throws with standards-compliant `McpError` / `ErrorCode` from the MCP SDK
+- `callMem0API` helper now supports query-string parameters and handles empty-body responses
+- Server version bumped to `1.2.0`
+- README rewritten to document all 13 tools, endpoint table, env vars, logging, and updated architecture diagram
+
 ## [1.1.0] - 2025-11-09
 
 ### Added
