@@ -1,6 +1,6 @@
 {
   "name": "mem0-custom-mcp",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Custom MCP server for self-hosted Mem0 API instances. Enables Claude Code to connect to your own Mem0 deployment.",
   "type": "module",
   "bin": {
@@ -48,7 +48,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "zod": "^3.24.1"
   },
   "devDependencies": {
