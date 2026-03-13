@@ -1,31 +1,32 @@
 #!/usr/bin/env node
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ErrorCode,
-  ListToolsRequestSchema,
-  McpError,
-} from "@modelcontextprotocol/sdk/types.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { isInitializeRequest, McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { createServer, IncomingMessage, ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 // ── Environment configuration ─────────────────────────────────────────────────
 const MEM0_API_URL = process.env.MEM0_API_URL || "http://localhost:8888";
 const DEFAULT_USER_ID = process.env.DEFAULT_USER_ID || "default";
 
+const _rawPort = parseInt(process.env.MCP_PORT ?? "3000", 10);
+if (!Number.isInteger(_rawPort) || _rawPort < 1 || _rawPort > 65535) {
+  process.stderr.write(JSON.stringify({ ts: new Date().toISOString(), level: "ERROR", message: `Invalid MCP_PORT value: "${process.env.MCP_PORT}". Must be an integer between 1 and 65535.` }) + "\n");
+  process.exit(1);
+}
+const MCP_PORT = _rawPort;
+
 // Bearer token sent as "Authorization: Bearer <token>" on every mem0 HTTP request.
 // Leave unset to disable.
 const MEM0_BEARER_TOKEN = process.env.MEM0_BEARER_TOKEN ?? "";
 
-// Token required from MCP clients in every tools/call request via _meta.auth_token.
+// Token required from MCP clients in the "Authorization: Bearer <token>" HTTP header.
 // Leave unset to disable.
 const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN ?? "";
 
 // ── Logger ────────────────────────────────────────────────────────────────────
-// NOTE: In stdio MCP mode stdout carries the JSON-RPC protocol stream.
-// Writing anything else to stdout would corrupt the protocol, so logs go to stderr.
-// Most container runtimes (Docker, Kubernetes) surface stderr in the same log stream.
 function log(level: "INFO" | "WARN" | "ERROR", message: string, data?: unknown): void {
   const entry: Record<string, unknown> = {
     ts: new Date().toISOString(),
@@ -161,366 +162,394 @@ async function callMem0API(
   }
 }
 
-// ── MCP Server ────────────────────────────────────────────────────────────────
+// ── MCP server factory ────────────────────────────────────────────────────────
+// Each client session gets its own McpServer instance so that session state
+// is fully isolated.  The heavy lifting (tool registration) happens here once
+// per session; it is cheap because McpServer just wires up handlers.
 
-const server = new Server(
-  { name: "mem0-custom-mcp", version: "1.2.0" },
-  { capabilities: { tools: {} } }
-);
+function createMcpServer(): McpServer {
+  const server = new McpServer({ name: "mem0-custom-mcp", version: "1.2.0" });
 
-// ── Tool list ─────────────────────────────────────────────────────────────────
-
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    // ── Memory CRUD ──────────────────────────────────────────────────────────
+  // ── add_memory ──────────────────────────────────────────────────────────────
+  server.registerTool(
+    "add_memory",
     {
-      name: "add_memory",
       description: "Store new memories extracted from a message in Mem0",
-      inputSchema: {
-        type: "object",
-        properties: {
-          content: { type: "string", description: "Content to remember" },
-          user_id: { type: "string", description: "User ID (defaults to DEFAULT_USER_ID env var)" },
-          agent_id: { type: "string", description: "Agent ID scope" },
-          run_id: { type: "string", description: "Run / session ID scope" },
-          metadata: { type: "object", description: "Optional metadata key-value pairs" },
-        },
-        required: ["content"],
-      },
+      inputSchema: AddMemorySchema,
     },
+    async ({ content, user_id, agent_id, run_id, metadata }) => {
+      const body: Record<string, unknown> = {
+        messages: [{ role: "user", content }],
+      };
+      if (agent_id) body.agent_id = agent_id;
+      else if (run_id) body.run_id = run_id;
+      else body.user_id = user_id ?? DEFAULT_USER_ID;
+      if (metadata) body.metadata = metadata;
+
+      const result = await callMem0API("/v1/memories/", "POST", body);
+      return { content: [{ type: "text" as const, text: `Memory added:\n${JSON.stringify(result, null, 2)}` }] };
+    }
+  );
+
+  // ── get_memories ────────────────────────────────────────────────────────────
+  server.registerTool(
+    "get_memories",
     {
-      name: "get_memories",
       description: "Retrieve all memories for a user / agent / run",
-      inputSchema: {
-        type: "object",
-        properties: {
-          user_id: { type: "string", description: "User ID (defaults to DEFAULT_USER_ID env var)" },
-          agent_id: { type: "string", description: "Filter by agent ID" },
-          run_id: { type: "string", description: "Filter by run/session ID" },
-        },
-      },
+      inputSchema: GetMemoriesSchema,
     },
+    async ({ user_id, agent_id, run_id }) => {
+      const userId = agent_id ?? run_id ?? user_id ?? DEFAULT_USER_ID;
+      const result = await callMem0API(`/v1/memories/${userId}`);
+      return { content: [{ type: "text" as const, text: `Memories:\n${JSON.stringify(result, null, 2)}` }] };
+    }
+  );
+
+  // ── get_memory ──────────────────────────────────────────────────────────────
+  server.registerTool(
+    "get_memory",
     {
-      name: "get_memory",
       description: "Retrieve a single memory by its ID",
-      inputSchema: {
-        type: "object",
-        properties: {
-          memory_id: { type: "string", description: "Memory ID" },
-        },
-        required: ["memory_id"],
-      },
+      inputSchema: GetMemorySchema,
     },
+    async ({ memory_id }) => {
+      const result = await callMem0API(`/v1/memories/${memory_id}`);
+      return { content: [{ type: "text" as const, text: `Memory:\n${JSON.stringify(result, null, 2)}` }] };
+    }
+  );
+
+  // ── search_memories ─────────────────────────────────────────────────────────
+  server.registerTool(
+    "search_memories",
     {
-      name: "search_memories",
       description: "Semantic search across memories",
-      inputSchema: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "Search query" },
-          user_id: { type: "string", description: "Scope to user ID (defaults to DEFAULT_USER_ID env var)" },
-          agent_id: { type: "string", description: "Scope to agent ID" },
-          run_id: { type: "string", description: "Scope to run/session ID" },
-          filters: { type: "object", description: "Additional metadata filters" },
-          limit: { type: "number", description: "Max results (default: 10)" },
-        },
-        required: ["query"],
-      },
+      inputSchema: SearchMemoriesSchema,
     },
+    async ({ query, user_id, agent_id, run_id, filters, limit }) => {
+      const body: Record<string, unknown> = { query };
+      if (agent_id) body.agent_id = agent_id;
+      else if (run_id) body.run_id = run_id;
+      else body.user_id = user_id ?? DEFAULT_USER_ID;
+      if (filters) body.filters = filters;
+      if (limit) body.limit = limit;
+
+      const result = await callMem0API("/v1/memories/search/", "POST", body);
+      return { content: [{ type: "text" as const, text: `Search results:\n${JSON.stringify(result, null, 2)}` }] };
+    }
+  );
+
+  // ── update_memory ───────────────────────────────────────────────────────────
+  server.registerTool(
+    "update_memory",
     {
-      name: "update_memory",
       description: "Update the text content of an existing memory",
-      inputSchema: {
-        type: "object",
-        properties: {
-          memory_id: { type: "string", description: "ID of the memory to update" },
-          data: { type: "string", description: "New text content for the memory" },
-        },
-        required: ["memory_id", "data"],
-      },
+      inputSchema: UpdateMemorySchema,
     },
+    async ({ memory_id, data }) => {
+      const result = await callMem0API(`/v1/memories/${memory_id}`, "PUT", { data });
+      return { content: [{ type: "text" as const, text: `Memory updated:\n${JSON.stringify(result, null, 2)}` }] };
+    }
+  );
+
+  // ── get_memory_history ──────────────────────────────────────────────────────
+  server.registerTool(
+    "get_memory_history",
     {
-      name: "get_memory_history",
       description: "Get the change history of a memory",
-      inputSchema: {
-        type: "object",
-        properties: {
-          memory_id: { type: "string", description: "Memory ID" },
-        },
-        required: ["memory_id"],
-      },
+      inputSchema: GetMemoryHistorySchema,
     },
+    async ({ memory_id }) => {
+      const result = await callMem0API(`/v1/memories/${memory_id}/history`);
+      return { content: [{ type: "text" as const, text: `Memory history:\n${JSON.stringify(result, null, 2)}` }] };
+    }
+  );
+
+  // ── delete_memory ───────────────────────────────────────────────────────────
+  server.registerTool(
+    "delete_memory",
     {
-      name: "delete_memory",
       description: "Delete a specific memory by ID",
-      inputSchema: {
-        type: "object",
-        properties: {
-          memory_id: { type: "string", description: "Memory ID to delete" },
-        },
-        required: ["memory_id"],
-      },
+      inputSchema: DeleteMemorySchema,
     },
+    async ({ memory_id }) => {
+      const result = await callMem0API(`/v1/memories/${memory_id}`, "DELETE");
+      return { content: [{ type: "text" as const, text: `Memory deleted:\n${JSON.stringify(result, null, 2)}` }] };
+    }
+  );
+
+  // ── delete_all_memories ─────────────────────────────────────────────────────
+  server.registerTool(
+    "delete_all_memories",
     {
-      name: "delete_all_memories",
       description: "Delete all memories for a given user / agent / run",
-      inputSchema: {
-        type: "object",
-        properties: {
-          user_id: { type: "string", description: "Delete memories for this user ID" },
-          agent_id: { type: "string", description: "Delete memories for this agent ID" },
-          run_id: { type: "string", description: "Delete memories for this run/session ID" },
-        },
-      },
+      inputSchema: DeleteAllMemoriesSchema,
     },
+    async ({ user_id, agent_id, run_id }) => {
+      const params: Record<string, string> = {};
+      if (agent_id) params.agent_id = agent_id;
+      else if (run_id) params.run_id = run_id;
+      else params.user_id = user_id ?? DEFAULT_USER_ID;
+
+      const result = await callMem0API("/v1/memories", "DELETE", undefined, params);
+      return { content: [{ type: "text" as const, text: `All memories deleted:\n${JSON.stringify(result, null, 2)}` }] };
+    }
+  );
+
+  // ── reset_memories ──────────────────────────────────────────────────────────
+  server.registerTool(
+    "reset_memories",
+    { description: "Reset (wipe) all memories in the store" },
+    async () => {
+      const result = await callMem0API("/v1/reset", "POST");
+      return { content: [{ type: "text" as const, text: `Memories reset:\n${JSON.stringify(result, null, 2)}` }] };
+    }
+  );
+
+  // ── get_health ──────────────────────────────────────────────────────────────
+  server.registerTool(
+    "get_health",
+    { description: "Check the health and current LLM configuration of the Mem0 service" },
+    async () => {
+      const result = await callMem0API("/v1/health");
+      return { content: [{ type: "text" as const, text: `Service health:\n${JSON.stringify(result, null, 2)}` }] };
+    }
+  );
+
+  // ── get_config ──────────────────────────────────────────────────────────────
+  server.registerTool(
+    "get_config",
+    { description: "Get the current Mem0 service configuration (LLM provider, embedder, stores)" },
+    async () => {
+      const result = await callMem0API("/v1/config");
+      return { content: [{ type: "text" as const, text: `Current config:\n${JSON.stringify(result, null, 2)}` }] };
+    }
+  );
+
+  // ── switch_provider ─────────────────────────────────────────────────────────
+  server.registerTool(
+    "switch_provider",
     {
-      name: "reset_memories",
-      description: "Reset (wipe) all memories in the store",
-      inputSchema: { type: "object", properties: {} },
-    },
-    // ── Config / health ──────────────────────────────────────────────────────
-    {
-      name: "get_health",
-      description: "Check the health and current LLM configuration of the Mem0 service",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "get_config",
-      description: "Get the current Mem0 service configuration (LLM provider, embedder, stores)",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "switch_provider",
       description: "Switch the LLM provider used by the Mem0 service on the fly",
-      inputSchema: {
-        type: "object",
-        properties: {
-          provider: {
-            type: "string",
-            enum: ["gemini", "openrouter", "nvidia", "qwen"],
-            description: "LLM provider to switch to",
-          },
-          model: {
-            type: "string",
-            description: "Optional model override (e.g. gemini/gemini-3.1-flash-lite-preview)",
-          },
-        },
-        required: ["provider"],
-      },
+      inputSchema: SwitchProviderSchema,
     },
+    async ({ provider, model }) => {
+      const body: Record<string, unknown> = { provider };
+      if (model) body.model = model;
+      const result = await callMem0API("/v1/config/switch", "POST", body);
+      return { content: [{ type: "text" as const, text: `Provider switched:\n${JSON.stringify(result, null, 2)}` }] };
+    }
+  );
+
+  // ── configure ───────────────────────────────────────────────────────────────
+  server.registerTool(
+    "configure",
     {
-      name: "configure",
       description: "Replace the full mem0 Memory configuration (advanced)",
-      inputSchema: {
-        type: "object",
-        properties: {
-          config: { type: "object", description: "Full mem0 configuration object" },
-        },
-        required: ["config"],
-      },
+      inputSchema: ConfigureSchema,
     },
-  ],
-}));
+    async ({ config }) => {
+      const result = await callMem0API("/v1/configure", "POST", config);
+      return { content: [{ type: "text" as const, text: `Configuration applied:\n${JSON.stringify(result, null, 2)}` }] };
+    }
+  );
 
-// ── Tool dispatch ─────────────────────────────────────────────────────────────
+  return server;
+}
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+// ── Session management ────────────────────────────────────────────────────────
+// Stateful mode: each MCP session gets its own McpServer + transport pair.
+// Sessions are keyed by the session ID generated by the transport.
 
-  // ── MCP auth check ────────────────────────────────────────────────────────
+interface Session {
+  mcpServer: McpServer;
+  transport: StreamableHTTPServerTransport;
+}
+
+const sessions = new Map<string, Session>();
+
+// ── Body parser ───────────────────────────────────────────────────────────────
+
+function readBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk: string) => { data += chunk; });
+    req.on("end", () => {
+      if (!data) { resolve(undefined); return; }
+      try { resolve(JSON.parse(data)); }
+      catch (e) { reject(e); }
+    });
+    req.on("error", reject);
+  });
+}
+
+// ── HTTP request handler ──────────────────────────────────────────────────────
+
+async function handleMcpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  // ── Auth check ─────────────────────────────────────────────────────────────
   if (MCP_AUTH_TOKEN) {
-    const provided = (request.params._meta as Record<string, unknown> | undefined)?.auth_token;
-    if (provided !== MCP_AUTH_TOKEN) {
-      log("WARN", "unauthorized tool call", { tool: name });
-      throw new McpError(ErrorCode.InvalidRequest, "Unauthorized: invalid or missing MCP auth token");
+    const authHeader = req.headers["authorization"] ?? "";
+    if (authHeader !== `Bearer ${MCP_AUTH_TOKEN}`) {
+      log("WARN", "unauthorized request", { method: req.method, url: req.url });
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Unauthorized: invalid or missing Bearer token" }));
+      return;
     }
   }
 
-  log("INFO", "tool call", { tool: name, args });
+  const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
-  try {
-    switch (name) {
-      // ── add_memory ─────────────────────────────────────────────────────────
-      case "add_memory": {
-        const { content, user_id, agent_id, run_id, metadata } =
-          AddMemorySchema.parse(args);
-
-        const body: Record<string, unknown> = {
-          messages: [{ role: "user", content }],
-        };
-        // At least one identifier is required by the API; default to user_id
-        if (agent_id) body.agent_id = agent_id;
-        else if (run_id) body.run_id = run_id;
-        else body.user_id = user_id ?? DEFAULT_USER_ID;
-
-        if (metadata) body.metadata = metadata;
-
-        const result = await callMem0API("/v1/memories/", "POST", body);
-        return {
-          content: [{ type: "text", text: `Memory added:\n${JSON.stringify(result, null, 2)}` }],
-        };
-      }
-
-      // ── get_memories ───────────────────────────────────────────────────────
-      case "get_memories": {
-        const { user_id, agent_id, run_id } = GetMemoriesSchema.parse(args);
-        // Use path param: GET /v1/memories/{userId}
-        const userId = agent_id ?? run_id ?? user_id ?? DEFAULT_USER_ID;
-        const result = await callMem0API(`/v1/memories/${userId}`);
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Memories:\n${JSON.stringify(result, null, 2)}`,
-            },
-          ],
-        };
-      }
-
-      // ── get_memory ─────────────────────────────────────────────────────────
-      case "get_memory": {
-        const { memory_id } = GetMemorySchema.parse(args);
-        const result = await callMem0API(`/v1/memories/${memory_id}`);
-        return {
-          content: [{ type: "text", text: `Memory:\n${JSON.stringify(result, null, 2)}` }],
-        };
-      }
-
-      // ── search_memories ────────────────────────────────────────────────────
-      case "search_memories": {
-        const { query, user_id, agent_id, run_id, filters, limit } =
-          SearchMemoriesSchema.parse(args);
-
-        const body: Record<string, unknown> = { query };
-        if (agent_id) body.agent_id = agent_id;
-        else if (run_id) body.run_id = run_id;
-        else body.user_id = user_id ?? DEFAULT_USER_ID;
-
-        if (filters) body.filters = filters;
-        if (limit) body.limit = limit;
-
-        const result = await callMem0API("/v1/memories/search/", "POST", body);
-        return {
-          content: [{ type: "text", text: `Search results:\n${JSON.stringify(result, null, 2)}` }],
-        };
-      }
-
-      // ── update_memory ──────────────────────────────────────────────────────
-      case "update_memory": {
-        const { memory_id, data } = UpdateMemorySchema.parse(args);
-        const result = await callMem0API(`/v1/memories/${memory_id}`, "PUT", { data });
-        return {
-          content: [{ type: "text", text: `Memory updated:\n${JSON.stringify(result, null, 2)}` }],
-        };
-      }
-
-      // ── get_memory_history ─────────────────────────────────────────────────
-      case "get_memory_history": {
-        const { memory_id } = GetMemoryHistorySchema.parse(args);
-        const result = await callMem0API(`/v1/memories/${memory_id}/history`);
-        return {
-          content: [{ type: "text", text: `Memory history:\n${JSON.stringify(result, null, 2)}` }],
-        };
-      }
-
-      // ── delete_memory ──────────────────────────────────────────────────────
-      case "delete_memory": {
-        const { memory_id } = DeleteMemorySchema.parse(args);
-        const result = await callMem0API(`/v1/memories/${memory_id}`, "DELETE");
-        return {
-          content: [{ type: "text", text: `Memory deleted:\n${JSON.stringify(result, null, 2)}` }],
-        };
-      }
-
-      // ── delete_all_memories ────────────────────────────────────────────────
-      case "delete_all_memories": {
-        const { user_id, agent_id, run_id } = DeleteAllMemoriesSchema.parse(args);
-        const params: Record<string, string> = {};
-        if (agent_id) params.agent_id = agent_id;
-        else if (run_id) params.run_id = run_id;
-        else params.user_id = user_id ?? DEFAULT_USER_ID;
-
-        const result = await callMem0API("/v1/memories", "DELETE", undefined, params);
-        return {
-          content: [{ type: "text", text: `All memories deleted:\n${JSON.stringify(result, null, 2)}` }],
-        };
-      }
-
-      // ── reset_memories ─────────────────────────────────────────────────────
-      case "reset_memories": {
-        const result = await callMem0API("/v1/reset", "POST");
-        return {
-          content: [{ type: "text", text: `Memories reset:\n${JSON.stringify(result, null, 2)}` }],
-        };
-      }
-
-      // ── get_health ─────────────────────────────────────────────────────────
-      case "get_health": {
-        const result = await callMem0API("/v1/health");
-        return {
-          content: [{ type: "text", text: `Service health:\n${JSON.stringify(result, null, 2)}` }],
-        };
-      }
-
-      // ── get_config ─────────────────────────────────────────────────────────
-      case "get_config": {
-        const result = await callMem0API("/v1/config");
-        return {
-          content: [{ type: "text", text: `Current config:\n${JSON.stringify(result, null, 2)}` }],
-        };
-      }
-
-      // ── switch_provider ────────────────────────────────────────────────────
-      case "switch_provider": {
-        const { provider, model } = SwitchProviderSchema.parse(args);
-        const body: Record<string, unknown> = { provider };
-        if (model) body.model = model;
-
-        const result = await callMem0API("/v1/config/switch", "POST", body);
-        return {
-          content: [{ type: "text", text: `Provider switched:\n${JSON.stringify(result, null, 2)}` }],
-        };
-      }
-
-      // ── configure ──────────────────────────────────────────────────────────
-      case "configure": {
-        const { config } = ConfigureSchema.parse(args);
-        const result = await callMem0API("/v1/configure", "POST", config);
-        return {
-          content: [{ type: "text", text: `Configuration applied:\n${JSON.stringify(result, null, 2)}` }],
-        };
-      }
-
-      default:
-        throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+  if (req.method === "POST") {
+    let body: unknown;
+    try {
+      body = await readBody(req);
+    } catch {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid JSON body" }));
+      return;
     }
-  } catch (error) {
-    if (error instanceof McpError) throw error;
-    if (error instanceof z.ZodError) {
-      log("WARN", "invalid tool arguments", { tool: name, error: error.message });
-      throw new McpError(ErrorCode.InvalidParams, `Invalid arguments: ${error.message}`);
+
+    if (!sessionId) {
+      // New session — must be an initialize request
+      if (!isInitializeRequest(body)) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Expected initialize request for new session" }));
+        return;
+      }
+
+      const mcpServer = createMcpServer();
+
+      // onsessioninitialized fires inside handleRequest once the session ID is
+      // assigned — this is the right moment to register the session.
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (sid) => {
+          sessions.set(sid, { mcpServer, transport });
+          log("INFO", "session created", { sessionId: sid });
+        },
+      });
+
+      transport.onclose = () => {
+        if (transport.sessionId) {
+          sessions.delete(transport.sessionId);
+          log("INFO", "session closed", { sessionId: transport.sessionId });
+        }
+      };
+
+      await mcpServer.connect(transport);
+      await transport.handleRequest(req, res, body);
+      return;
     }
-    log("ERROR", "unhandled tool error", { tool: name, error: error instanceof Error ? error.message : String(error) });
-    throw new McpError(
-      ErrorCode.InternalError,
-      error instanceof Error ? error.message : String(error)
-    );
+
+    // Continuing existing session
+    const session = sessions.get(sessionId);
+    if (!session) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Session not found" }));
+      return;
+    }
+
+    await session.transport.handleRequest(req, res, body);
+    return;
   }
-});
 
-// ── Start ─────────────────────────────────────────────────────────────────────
+  if (req.method === "GET") {
+    // SSE stream for server-initiated messages
+    if (!sessionId) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "mcp-session-id header required" }));
+      return;
+    }
+
+    const session = sessions.get(sessionId);
+    if (!session) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Session not found" }));
+      return;
+    }
+
+    await session.transport.handleRequest(req, res);
+    return;
+  }
+
+  if (req.method === "DELETE") {
+    // Explicit session termination
+    if (!sessionId) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "mcp-session-id header required" }));
+      return;
+    }
+
+    const session = sessions.get(sessionId);
+    if (!session) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+
+    await session.transport.close();
+    sessions.delete(sessionId);
+    log("INFO", "session terminated by client", { sessionId });
+    res.writeHead(200);
+    res.end();
+    return;
+  }
+
+  res.writeHead(405, { "Allow": "GET, POST, DELETE" });
+  res.end("Method Not Allowed");
+}
+
+// ── HTTP server ───────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    const url = req.url ?? "/";
 
-  // NOTE: In stdio MCP mode stdout is the JSON-RPC protocol stream.
-  // All logging goes to stderr so it does not corrupt the protocol.
-  log("INFO", "Mem0 Custom MCP Server running", {
-    api_url: MEM0_API_URL,
-    default_user_id: DEFAULT_USER_ID,
-    mem0_auth: MEM0_BEARER_TOKEN ? "enabled" : "disabled",
-    mcp_auth: MCP_AUTH_TOKEN ? "enabled" : "disabled",
+    // Health probe for Docker / load-balancers — does not require auth
+    if (url === "/health" && req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok", sessions: sessions.size }));
+      return;
+    }
+
+    if (url === "/mcp" || url.startsWith("/mcp?")) {
+      try {
+        await handleMcpRequest(req, res);
+      } catch (error) {
+        log("ERROR", "unhandled request error", { error: error instanceof Error ? error.message : String(error) });
+        if (!res.headersSent) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Internal server error" }));
+        }
+      }
+      return;
+    }
+
+    res.writeHead(404);
+    res.end("Not Found");
+  });
+
+  httpServer.listen(MCP_PORT, "0.0.0.0", () => {
+    log("INFO", "Mem0 Custom MCP Server running (HTTP Streamable)", {
+      port: MCP_PORT,
+      endpoint: `http://0.0.0.0:${MCP_PORT}/mcp`,
+      api_url: MEM0_API_URL,
+      default_user_id: DEFAULT_USER_ID,
+      mem0_auth: MEM0_BEARER_TOKEN ? "enabled" : "disabled",
+      mcp_auth: MCP_AUTH_TOKEN ? "enabled" : "disabled",
+    });
+  });
+
+  // Graceful shutdown
+  process.on("SIGTERM", async () => {
+    log("INFO", "SIGTERM received, shutting down");
+    for (const [id, session] of sessions) {
+      await session.transport.close().catch((err: unknown) => {
+        log("WARN", "error closing session during shutdown", { sessionId: id, error: err instanceof Error ? err.message : String(err) });
+      });
+      sessions.delete(id);
+    }
+    httpServer.close(() => process.exit(0));
   });
 }
 
