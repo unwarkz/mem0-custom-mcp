@@ -27,7 +27,16 @@ const MEM0_BEARER_TOKEN = process.env.MEM0_BEARER_TOKEN ?? "";
 const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN ?? "";
 
 // ── Logger ────────────────────────────────────────────────────────────────────
-function log(level: "INFO" | "WARN" | "ERROR", message: string, data?: unknown): void {
+
+type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
+
+const LOG_LEVEL_RANK: Record<LogLevel, number> = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
+
+const _rawLogLevel = (process.env.LOG_LEVEL ?? "INFO").toUpperCase() as LogLevel;
+const LOG_LEVEL: LogLevel = LOG_LEVEL_RANK[_rawLogLevel] !== undefined ? _rawLogLevel : "INFO";
+
+function log(level: LogLevel, message: string, data?: unknown): void {
+  if (LOG_LEVEL_RANK[level] < LOG_LEVEL_RANK[LOG_LEVEL]) return;
   const entry: Record<string, unknown> = {
     ts: new Date().toISOString(),
     level,
@@ -35,6 +44,17 @@ function log(level: "INFO" | "WARN" | "ERROR", message: string, data?: unknown):
   };
   if (data !== undefined) entry.data = data;
   process.stderr.write(JSON.stringify(entry) + "\n");
+}
+
+function logError(message: string, error: unknown, extra?: Record<string, unknown>): void {
+  const data: Record<string, unknown> = { ...extra };
+  if (error instanceof Error) {
+    data.error = error.message;
+    if (error.stack) data.stack = error.stack;
+  } else {
+    data.error = String(error);
+  }
+  log("ERROR", message, data);
 }
 
 // ── Zod schemas for input validation ─────────────────────────────────────────
@@ -145,6 +165,7 @@ async function callMem0API(
       );
     }
 
+
     // Some endpoints return empty bodies (204 No Content style)
     const text = await response.text();
     const result = text ? JSON.parse(text) : { message: "OK" };
@@ -154,7 +175,7 @@ async function callMem0API(
     clearTimeout(timeoutId);
     if (error instanceof McpError) throw error;
     const elapsed = Date.now() - start;
-    log("ERROR", "mem0 call failed", { method, url: endpoint, elapsed, error: error instanceof Error ? error.message : String(error) });
+    logError("mem0 call failed", error, { method, url: endpoint, elapsed });
     if (error instanceof Error) {
       throw new McpError(ErrorCode.InternalError, `Failed to call Mem0 API: ${error.message}`);
     }
@@ -386,6 +407,17 @@ function readBody(req: IncomingMessage): Promise<unknown> {
 // ── HTTP request handler ──────────────────────────────────────────────────────
 
 async function handleMcpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  // ── Log incoming request ───────────────────────────────────────────────────
+  const remoteIp = req.socket?.remoteAddress ?? "unknown";
+  log("INFO", "incoming request", {
+    method: req.method,
+    url: req.url,
+    remoteIp,
+    sessionId: req.headers["mcp-session-id"] ?? null,
+    contentType: req.headers["content-type"] ?? null,
+    userAgent: req.headers["user-agent"] ?? null,
+  });
+
   // ── Auth check ─────────────────────────────────────────────────────────────
   if (MCP_AUTH_TOKEN) {
     const authHeader = req.headers["authorization"] ?? "";
@@ -516,7 +548,7 @@ async function main(): Promise<void> {
       try {
         await handleMcpRequest(req, res);
       } catch (error) {
-        log("ERROR", "unhandled request error", { error: error instanceof Error ? error.message : String(error) });
+        logError("unhandled request error", error);
         if (!res.headersSent) {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Internal server error" }));
@@ -545,7 +577,11 @@ async function main(): Promise<void> {
     log("INFO", "SIGTERM received, shutting down");
     for (const [id, session] of sessions) {
       await session.transport.close().catch((err: unknown) => {
-        log("WARN", "error closing session during shutdown", { sessionId: id, error: err instanceof Error ? err.message : String(err) });
+        log("WARN", "error closing session during shutdown", {
+          sessionId: id,
+          error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        });
       });
       sessions.delete(id);
     }
@@ -554,6 +590,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  log("ERROR", "Fatal error", { error: error instanceof Error ? error.message : String(error) });
+  logError("Fatal error", error);
   process.exit(1);
 });

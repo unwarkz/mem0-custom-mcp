@@ -5,7 +5,10 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue)](https://www.typescriptlang.org/)
 [![MCP Protocol](https://img.shields.io/badge/MCP-HTTP%20Streamable-purple)](https://modelcontextprotocol.io/)
 
-A custom Model Context Protocol (MCP) server that connects to self-hosted Mem0 API instances. Enables Claude Code to use your own Mem0 deployment for memory management.
+A custom Model Context Protocol (MCP) server that connects to self-hosted Mem0 API instances over the network. Enables Claude Code and VS Code to use your own Mem0 deployment for memory management — from any machine.
+
+> **Based on the excellent work of [emasoudy/mem0-custom-mcp](https://github.com/emasoudy/mem0-custom-mcp)** by Essam Masoudy.  
+> This fork extends the original with improved logging (request tracing, log-level control, stack traces) and documentation improvements.
 
 ## Why This Exists
 
@@ -14,66 +17,63 @@ The official `@mem0/mcp-server` and community `@pinkpixel/mem0-mcp` packages onl
 - Supabase backend
 - Local storage
 
-**Neither supports connecting to custom self-hosted Mem0 API endpoints.**
+**Neither supports connecting to custom self-hosted Mem0 API endpoints — and neither exposes the MCP endpoint over the network.**
 
-This custom MCP server bridges that gap by providing a wrapper around your self-hosted Mem0 API.
+This server bridges that gap: it wraps your self-hosted Mem0 API and exposes an MCP **HTTP Streamable** endpoint that any machine on your network can reach.
 
 ## Features
 
-- ✅ Connects to self-hosted Mem0 API at custom endpoints
+- ✅ Connects to self-hosted Mem0 API at a custom endpoint (`MEM0_API_URL`)
 - ✅ Implements MCP **HTTP Streamable** transport — accessible from any machine on the network
-- ✅ Uses the high-level `McpServer` API (current MCP SDK best practice)
-- ✅ Full coverage of all mem0 REST API endpoints:
-  - Memory CRUD: `add_memory`, `get_memories`, `get_memory`, `update_memory`, `delete_memory`, `delete_all_memories`
-  - Search: `search_memories` (semantic / vector search)
-  - History & reset: `get_memory_history`, `reset_memories`
-  - Config & health: `get_health`, `get_config`, `switch_provider`, `configure`
-- ✅ Supports `user_id`, `agent_id`, and `run_id` scope identifiers on all relevant operations
+- ✅ Full coverage of all mem0 REST API endpoints (13 tools)
+- ✅ `user_id`, `agent_id`, and `run_id` scope identifiers on all relevant operations
 - ✅ Stateful session management (each MCP client gets an isolated session)
-- ✅ `Authorization: Bearer <token>` protection for the HTTP endpoint (`MCP_AUTH_TOKEN`)
-- ✅ Environment variable configuration
-- ✅ Full TypeScript implementation with type safety
+- ✅ `Authorization: Bearer <token>` protection for both the MCP endpoint and mem0 backend
+- ✅ Structured JSON logging to stderr with configurable log level (`LOG_LEVEL`)
+- ✅ Every incoming client request and every outgoing mem0 call is logged with timing
+- ✅ Error logs include stack traces to pinpoint failures
 - ✅ **120-second timeout** for slow Mem0 API responses (handles LLM processing delays)
 - ✅ Docker-ready with built-in `/health` endpoint and `HEALTHCHECK`
 
 ## Installation
 
-### From GitHub (Recommended for now)
+### Docker (Recommended)
 
 ```bash
-# Clone the repository
-git clone https://github.com/emasoudy/mem0-custom-mcp.git
+git clone https://github.com/unwarkz/mem0-custom-mcp.git
 cd mem0-custom-mcp
-
-# Install dependencies
-npm install
-
-# Build the project
-npm run build
+cp .env.example .env   # edit as needed
+docker compose up -d
 ```
 
-### From npm (Future - when published)
+The server starts on port `3000` by default. Override with `MCP_PORT` in `.env`.
+
+### Node.js
 
 ```bash
-# This will be available after npm publish
-npm install -g mem0-custom-mcp
+git clone https://github.com/unwarkz/mem0-custom-mcp.git
+cd mem0-custom-mcp
+npm install
+npm run build
+npm start
 ```
 
 ## Configuration
 
-The server is configured via environment variables:
+Configure via environment variables (copy `.env.example` to `.env`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MEM0_API_URL` | `http://localhost:8888` | URL of your self-hosted Mem0 API |
 | `DEFAULT_USER_ID` | `default` | Fallback user ID when none is supplied in a tool call |
 | `MCP_PORT` | `3000` | Port the HTTP MCP server listens on |
-| `MEM0_BEARER_TOKEN` | _(unset)_ | If set, sent as `Authorization: Bearer <token>` on every HTTP request to mem0 |
-| `MCP_AUTH_TOKEN` | _(unset)_ | If set, every MCP HTTP request must include a matching `Authorization: Bearer <token>` header; requests without it are rejected with `401 Unauthorized` |
+| `MEM0_BEARER_TOKEN` | _(unset)_ | If set, sent as `Authorization: Bearer <token>` on every request to mem0 |
+| `MCP_AUTH_TOKEN` | _(unset)_ | If set, every MCP HTTP request must include a matching `Authorization: Bearer <token>` header |
+| `LOG_LEVEL` | `INFO` | Log verbosity: `DEBUG` \| `INFO` \| `WARN` \| `ERROR` |
 
 **`MEM0_BEARER_TOKEN`** — authenticate this MCP server's requests to the mem0 backend.
 
-**`MCP_AUTH_TOKEN`** — protect this MCP server from unauthorised callers. When enabled, the connecting MCP client must pass the token as a Bearer header in every request:
+**`MCP_AUTH_TOKEN`** — protect this MCP server from unauthorised callers:
 ```
 Authorization: Bearer your-secret
 ```
@@ -82,27 +82,28 @@ Authorization: Bearer your-secret
 
 All log entries go to **stderr** as newline-delimited JSON:
 ```json
-{"ts":"2026-03-13T12:00:00.000Z","level":"INFO","message":"session created","data":{"sessionId":"abc-123"}}
+{"ts":"2026-03-13T12:00:00.000Z","level":"INFO","message":"incoming request","data":{"method":"POST","url":"/mcp","remoteIp":"192.168.1.5","sessionId":null}}
+{"ts":"2026-03-13T12:00:00.010Z","level":"INFO","message":"session created","data":{"sessionId":"abc-123"}}
 {"ts":"2026-03-13T12:00:00.050Z","level":"INFO","message":"mem0 request","data":{"method":"POST","url":"/v1/memories/","body":{...}}}
 {"ts":"2026-03-13T12:00:01.200Z","level":"INFO","message":"mem0 response","data":{"method":"POST","url":"/v1/memories/","status":200,"elapsed":1150}}
 ```
 
-**Example configurations:**
-- Local: `http://localhost:8888`
-- Docker: `http://host.docker.internal:8888`
-- Remote/VPN: `http://your-server-ip:8888`
+Error entries include a `stack` field for easy debugging:
+```json
+{"ts":"...","level":"ERROR","message":"mem0 call failed","data":{"method":"POST","url":"/v1/memories/","elapsed":100,"error":"fetch failed","stack":"Error: fetch failed\n    at ..."}}
+```
 
-### Claude Code / VS Code Configuration (HTTP Streamable)
+Set `LOG_LEVEL=DEBUG` to log additional diagnostic detail.
+
+### Connecting MCP Clients (HTTP Streamable)
 
 The server exposes a single HTTP endpoint at `http://<host>:<MCP_PORT>/mcp`.  
-Connect to it from any machine on the network using `"type": "http"` (the identifier used by
-VS Code and Claude Code for the MCP Streamable HTTP transport).
+Connect to it from any machine on the network using `"type": "http"`.
 
 > **Network access note:** The server binds to `0.0.0.0` by default so it is reachable on all
-> network interfaces. When running in Docker and exposing the port, make sure to restrict access
-> using firewall rules or set `MCP_AUTH_TOKEN` to require authentication.
+> network interfaces. Restrict access with firewall rules or set `MCP_AUTH_TOKEN`.
 
-#### Option 1: VS Code `settings.json`
+#### VS Code `settings.json`
 
 ```json
 {
@@ -117,7 +118,7 @@ VS Code and Claude Code for the MCP Streamable HTTP transport).
 }
 ```
 
-If you enabled `MCP_AUTH_TOKEN`, add the header:
+With `MCP_AUTH_TOKEN` set:
 ```json
 {
   "mcp": {
@@ -134,7 +135,7 @@ If you enabled `MCP_AUTH_TOKEN`, add the header:
 }
 ```
 
-#### Option 2: Claude Code CLI
+#### Claude Code CLI
 
 ```bash
 claude mcp add mem0 \
@@ -142,7 +143,7 @@ claude mcp add mem0 \
   --url "http://<docker-host-ip>:3000/mcp"
 ```
 
-#### Option 3: `.mcp.json` project file
+#### `.mcp.json` project file
 
 ```json
 {
@@ -155,114 +156,27 @@ claude mcp add mem0 \
 }
 ```
 
-## Development
-
-- `npm run build` - Compile TypeScript to JavaScript
-- `npm run dev` - Build and run the server
-- `npm start` - Run the compiled server
-
 ## Available Tools
 
-### add_memory
+| Tool | Description |
+|------|-------------|
+| `add_memory` | Store new memories extracted from a message |
+| `get_memories` | Retrieve all memories for a user / agent / run |
+| `get_memory` | Retrieve a single memory by ID |
+| `search_memories` | Semantic search across memories |
+| `update_memory` | Update the text of an existing memory |
+| `get_memory_history` | Get the change history of a memory |
+| `delete_memory` | Delete a specific memory by ID |
+| `delete_all_memories` | Delete all memories for a user / agent / run |
+| `reset_memories` | Wipe the entire memory store |
+| `get_health` | Check service health and current LLM info |
+| `get_config` | Get current mem0 configuration |
+| `switch_provider` | Hot-swap the LLM provider (no restart needed) |
+| `configure` | Replace the full mem0 Memory configuration |
 
-Store new memories extracted from a message in Mem0.
-
-**Parameters:**
-- `content` (required) - The content to remember
-- `user_id` (optional) - User ID (defaults to `DEFAULT_USER_ID` env var)
-- `agent_id` (optional) - Agent ID scope
-- `run_id` (optional) - Run / session ID scope
-- `metadata` (optional) - Additional metadata key-value pairs
-
-### get_memories
-
-Retrieve all memories for a user / agent / run.
-
-**Parameters:**
-- `user_id` (optional) - User ID (defaults to `DEFAULT_USER_ID` env var)
-- `agent_id` (optional) - Filter by agent ID
-- `run_id` (optional) - Filter by run/session ID
-
-### get_memory
-
-Retrieve a single memory by its ID.
-
-**Parameters:**
-- `memory_id` (required) - Memory ID
-
-### search_memories
-
-Semantic search across memories.
-
-**Parameters:**
-- `query` (required) - Search query
-- `user_id` (optional) - Scope to user ID (defaults to `DEFAULT_USER_ID` env var)
-- `agent_id` (optional) - Scope to agent ID
-- `run_id` (optional) - Scope to run/session ID
-- `filters` (optional) - Additional metadata filters
-- `limit` (optional) - Max results (default: 10)
-
-### update_memory
-
-Update the text content of an existing memory.
-
-**Parameters:**
-- `memory_id` (required) - ID of the memory to update
-- `data` (required) - New text content for the memory
-
-### get_memory_history
-
-Get the change history of a memory.
-
-**Parameters:**
-- `memory_id` (required) - Memory ID
-
-### delete_memory
-
-Delete a specific memory by ID.
-
-**Parameters:**
-- `memory_id` (required) - Memory ID to delete
-
-### delete_all_memories
-
-Delete all memories for a given user / agent / run.
-
-**Parameters:**
-- `user_id` (optional) - Delete memories for this user ID (defaults to `DEFAULT_USER_ID` env var)
-- `agent_id` (optional) - Delete memories for this agent ID
-- `run_id` (optional) - Delete memories for this run/session ID
-
-### reset_memories
-
-Reset (wipe) all memories in the store. No parameters.
-
-### get_health
-
-Check the health and current LLM configuration of the Mem0 service. No parameters.
-
-### get_config
-
-Get the current Mem0 service configuration (LLM provider, embedder, vector store, graph store). No parameters.
-
-### switch_provider
-
-Switch the LLM provider used by the Mem0 service on the fly (no service restart required).
-
-**Parameters:**
-- `provider` (required) - One of: `gemini` | `openrouter` | `nvidia` | `qwen`
-- `model` (optional) - Model override (e.g. `gemini/gemini-3.1-flash-lite-preview`, `anthropic/claude-sonnet-4-6`)
-
-### configure
-
-Replace the full mem0 Memory configuration (advanced use).
-
-**Parameters:**
-- `config` (required) - Full mem0 configuration object
+All tools that operate on memories accept optional `user_id`, `agent_id`, and `run_id` scope parameters.
 
 ## Architecture
-
-This MCP server acts as a bridge between MCP clients (Claude Code, VS Code, etc.) and your self-hosted Mem0 API instance:
 
 ```
 ┌─────────────────────────────────────────┐
@@ -272,66 +186,30 @@ This MCP server acts as a bridge between MCP clients (Claude Code, VS Code, etc.
                      │ MCP HTTP Streamable (port 3000)
                      │ POST/GET/DELETE http://<host>:3000/mcp
 ┌────────────────────▼────────────────────┐
-│         mem0-custom-mcp                 │  ← This MCP server (Node.js, Docker)
+│         mem0-custom-mcp                 │  ← This MCP server (Node.js / Docker)
 │     HTTP Streamable MCP Server          │    McpServer + StreamableHTTPServerTransport
 └────────────────────┬────────────────────┘
                      │ HTTP REST API
 ┌────────────────────▼────────────────────┐
 │       Self-Hosted Mem0 API              │  ← Mem0 API server (Python/FastAPI)
-│       (host.docker.internal:8888)       │    Handles memory operations
+│       (host.docker.internal:8888)       │
 └──────────────┬─────────────────┬────────┘
                │                 │
         ┌──────▼──────┐   ┌──────▼──────┐
-        │   Qdrant    │   │   Neo4j     │  ← Databases managed by Mem0 API
+        │   Qdrant    │   │   Neo4j     │
         │  (Vector)   │   │   (Graph)   │
         └─────────────┘   └─────────────┘
 ```
 
-**Flow:**
-1. MCP client connects to `http://<host>:3000/mcp` — the server creates a stateful session
-2. Client calls MCP tools (add_memory, search_memories, etc.) via HTTP POST
-3. mem0-custom-mcp forwards the request to the Mem0 API via HTTP
-4. Mem0 API processes requests and manages Qdrant/Neo4j databases
-5. Results flow back through the chain to the MCP client
-
-**Note:** This server does NOT directly access Qdrant or Neo4j. It communicates only with the Mem0 API endpoint, which handles all database operations.
-
-## Mem0 API Endpoints Used
-
-All endpoints are called with the `/v1/` prefix:
-
-| Tool | Method | Endpoint |
-|------|--------|----------|
-| `add_memory` | POST | `/v1/memories/` |
-| `get_memories` | GET | `/v1/memories/{user_id}` |
-| `get_memory` | GET | `/v1/memories/{memory_id}` |
-| `search_memories` | POST | `/v1/memories/search/` |
-| `update_memory` | PUT | `/v1/memories/{memory_id}` |
-| `get_memory_history` | GET | `/v1/memories/{memory_id}/history` |
-| `delete_memory` | DELETE | `/v1/memories/{memory_id}` |
-| `delete_all_memories` | DELETE | `/v1/memories?user_id=...` |
-| `reset_memories` | POST | `/v1/reset` |
-| `get_health` | GET | `/v1/health` |
-| `get_config` | GET | `/v1/config` |
-| `switch_provider` | POST | `/v1/config/switch` |
-| `configure` | POST | `/v1/configure` |
-
 ## Troubleshooting
 
-### Server won't start
+### View server logs
 
-Check container logs:
 ```bash
 docker compose logs -f mem0-custom-mcp
 ```
 
-Common issues:
-- `MCP_PORT` already in use — change it in `.env`
-- Mem0 API not accessible — check `MEM0_API_URL` and network connectivity
-
 ### Health check
-
-The server exposes a lightweight health endpoint that does **not** require authentication:
 
 ```bash
 curl http://<docker-host-ip>:3000/health
@@ -340,59 +218,18 @@ curl http://<docker-host-ip>:3000/health
 
 ### Connection timeout
 
-The MCP server has a built-in **120-second timeout** for Mem0 API requests. This accommodates the time needed for:
-- LLM API calls to generate embeddings
-- LLM processing to extract entities and relationships
-- Database operations (Qdrant + Neo4j)
+The server has a built-in **120-second timeout** for Mem0 API requests to accommodate LLM processing. Typical memory creation takes 30–60 seconds with a hosted LLM.
 
-Typical memory creation takes 30-60 seconds when using a hosted LLM.
+### Verify Mem0 API is reachable
 
-If you need to adjust the timeout, modify `src/index.ts`:
-```typescript
-const timeoutId = setTimeout(() => controller.abort(), 120_000); // 2 minutes
-```
-
-### Tool errors
-
-Verify your Mem0 API is running:
 ```bash
-# For local deployment
 curl http://localhost:8888/health
-
-# For remote/VPN deployment
-curl http://your-server-ip:8888/health
+# {"status": "ok", "provider": "gemini", ...}
 ```
-
-Expected response:
-```json
-{"status": "ok", "provider": "gemini", "model": "gemini/gemini-3.1-flash-lite-preview", "embedder": "models/gemini-embedding-2-preview", "dims": 1536}
-```
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-### Development
-
-```bash
-# Clone and setup
-git clone https://github.com/emasoudy/mem0-custom-mcp.git
-cd mem0-custom-mcp
-npm install
-
-# Make changes to src/index.ts
-# Build and test
-npm run build
-npm run dev  # Build and run
-```
-
-## Changelog
-
-See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License — see [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
@@ -400,8 +237,3 @@ MIT License - see [LICENSE](LICENSE) for details.
 - Works with [Mem0](https://mem0.ai/) self-hosted instances
 - Designed for [Claude Code](https://code.claude.com/)
 
-## Support
-
-- 🐛 [Report bugs](https://github.com/emasoudy/mem0-custom-mcp/issues)
-- 💡 [Request features](https://github.com/emasoudy/mem0-custom-mcp/issues)
-- 📖 [Read the docs](https://github.com/emasoudy/mem0-custom-mcp#readme)
