@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue)](https://www.typescriptlang.org/)
-[![MCP Protocol](https://img.shields.io/badge/MCP-stdio-purple)](https://modelcontextprotocol.io/)
+[![MCP Protocol](https://img.shields.io/badge/MCP-HTTP%20Streamable-purple)](https://modelcontextprotocol.io/)
 
 A custom Model Context Protocol (MCP) server that connects to self-hosted Mem0 API instances. Enables Claude Code to use your own Mem0 deployment for memory management.
 
@@ -21,17 +21,20 @@ This custom MCP server bridges that gap by providing a wrapper around your self-
 ## Features
 
 - ✅ Connects to self-hosted Mem0 API at custom endpoints
-- ✅ Implements MCP stdio protocol for Claude Code integration
+- ✅ Implements MCP **HTTP Streamable** transport — accessible from any machine on the network
+- ✅ Uses the high-level `McpServer` API (current MCP SDK best practice)
 - ✅ Full coverage of all mem0 REST API endpoints:
   - Memory CRUD: `add_memory`, `get_memories`, `get_memory`, `update_memory`, `delete_memory`, `delete_all_memories`
   - Search: `search_memories` (semantic / vector search)
   - History & reset: `get_memory_history`, `reset_memories`
   - Config & health: `get_health`, `get_config`, `switch_provider`, `configure`
 - ✅ Supports `user_id`, `agent_id`, and `run_id` scope identifiers on all relevant operations
+- ✅ Stateful session management (each MCP client gets an isolated session)
+- ✅ `Authorization: Bearer <token>` protection for the HTTP endpoint (`MCP_AUTH_TOKEN`)
 - ✅ Environment variable configuration
 - ✅ Full TypeScript implementation with type safety
 - ✅ **120-second timeout** for slow Mem0 API responses (handles LLM processing delays)
-- ✅ Proper MCP error types (`McpError` / `ErrorCode`) for standards-compliant error handling
+- ✅ Docker-ready with built-in `/health` endpoint and `HEALTHCHECK`
 
 ## Installation
 
@@ -64,103 +67,66 @@ The server is configured via environment variables:
 |----------|---------|-------------|
 | `MEM0_API_URL` | `http://localhost:8888` | URL of your self-hosted Mem0 API |
 | `DEFAULT_USER_ID` | `default` | Fallback user ID when none is supplied in a tool call |
+| `MCP_PORT` | `3000` | Port the HTTP MCP server listens on |
 | `MEM0_BEARER_TOKEN` | _(unset)_ | If set, sent as `Authorization: Bearer <token>` on every HTTP request to mem0 |
-| `MCP_AUTH_TOKEN` | _(unset)_ | If set, every MCP tool call must include a matching token in `_meta.auth_token`; calls without it are rejected with `Unauthorized` |
+| `MCP_AUTH_TOKEN` | _(unset)_ | If set, every MCP HTTP request must include a matching `Authorization: Bearer <token>` header; requests without it are rejected with `401 Unauthorized` |
 
 **`MEM0_BEARER_TOKEN`** — authenticate this MCP server's requests to the mem0 backend.
 
-**`MCP_AUTH_TOKEN`** — protect this MCP server from unauthorised callers. When enabled, the calling MCP client must pass the token in `_meta`:
-```json
-{
-  "method": "tools/call",
-  "params": {
-    "name": "get_health",
-    "arguments": {},
-    "_meta": { "auth_token": "your-secret" }
-  }
-}
+**`MCP_AUTH_TOKEN`** — protect this MCP server from unauthorised callers. When enabled, the connecting MCP client must pass the token as a Bearer header in every request:
+```
+Authorization: Bearer your-secret
 ```
 
 ### Logging
 
 All log entries go to **stderr** as newline-delimited JSON:
 ```json
-{"ts":"2026-03-13T12:00:00.000Z","level":"INFO","message":"tool call","data":{"tool":"add_memory","args":{...}}}
-{"ts":"2026-03-13T12:00:00.100Z","level":"INFO","message":"mem0 request","data":{"method":"POST","url":"/v1/memories/","body":{...}}}
-{"ts":"2026-03-13T12:00:01.200Z","level":"INFO","message":"mem0 response","data":{"method":"POST","url":"/v1/memories/","status":200,"elapsed":1100}}
+{"ts":"2026-03-13T12:00:00.000Z","level":"INFO","message":"session created","data":{"sessionId":"abc-123"}}
+{"ts":"2026-03-13T12:00:00.050Z","level":"INFO","message":"mem0 request","data":{"method":"POST","url":"/v1/memories/","body":{...}}}
+{"ts":"2026-03-13T12:00:01.200Z","level":"INFO","message":"mem0 response","data":{"method":"POST","url":"/v1/memories/","status":200,"elapsed":1150}}
 ```
-
-> **Why stderr?** In stdio MCP mode stdout carries the JSON-RPC protocol stream. Writing arbitrary bytes to stdout would corrupt the protocol. Most container runtimes (Docker, Kubernetes, systemd) surface stderr in the same log stream as stdout.
 
 **Example configurations:**
 - Local: `http://localhost:8888`
 - Docker: `http://host.docker.internal:8888`
 - Remote/VPN: `http://your-server-ip:8888`
 
-### Claude Code Configuration
+### Claude Code / VS Code Configuration (HTTP Streamable)
 
-You can configure this MCP server at either **user level** (available in all projects) or **project level** (specific project only).
+The server exposes a single HTTP endpoint at `http://<host>:<MCP_PORT>/mcp`.  
+Connect to it from any machine on the network using `"type": "http"` (the identifier used by
+VS Code and Claude Code for the MCP Streamable HTTP transport).
 
-#### Option 1: Using CLI (Recommended)
+> **Network access note:** The server binds to `0.0.0.0` by default so it is reachable on all
+> network interfaces. When running in Docker and exposing the port, make sure to restrict access
+> using firewall rules or set `MCP_AUTH_TOKEN` to require authentication.
 
-**User-level (available everywhere):**
-```bash
-claude mcp add mem0 \
-  --scope user \
-  --command node \
-  --arg "/absolute/path/to/mem0-custom-mcp/dist/index.js" \
-  --env MEM0_API_URL=http://localhost:8888 \
-  --env DEFAULT_USER_ID=default
-```
+#### Option 1: VS Code `settings.json`
 
-**Project-level (specific project only):**
-```bash
-cd /path/to/your/project
-claude mcp add mem0 \
-  --scope project \
-  --command node \
-  --arg "/absolute/path/to/mem0-custom-mcp/dist/index.js" \
-  --env MEM0_API_URL=http://localhost:8888 \
-  --env DEFAULT_USER_ID=default
-```
-
-#### Option 2: Manual Configuration
-
-**User-level** - Edit `~/.claude.json`:
 ```json
 {
-  "mcpServers": {
-    "mem0": {
-      "type": "stdio",
-      "command": "node",
-      "args": [
-        "/absolute/path/to/mem0-custom-mcp/dist/index.js"
-      ],
-      "env": {
-        "MEM0_API_URL": "http://localhost:8888",
-        "DEFAULT_USER_ID": "default"
+  "mcp": {
+    "servers": {
+      "mem0": {
+        "type": "http",
+        "url": "http://<docker-host-ip>:3000/mcp"
       }
     }
   }
 }
 ```
 
-**Project-level** - Edit `.claude.json` in your project root:
+If you enabled `MCP_AUTH_TOKEN`, add the header:
 ```json
 {
-  "projects": {
-    "your-project-path": {
-      "mcpServers": {
-        "mem0": {
-          "type": "stdio",
-          "command": "node",
-          "args": [
-            "/absolute/path/to/mem0-custom-mcp/dist/index.js"
-          ],
-          "env": {
-            "MEM0_API_URL": "http://localhost:8888",
-            "DEFAULT_USER_ID": "default"
-          }
+  "mcp": {
+    "servers": {
+      "mem0": {
+        "type": "http",
+        "url": "http://<docker-host-ip>:3000/mcp",
+        "headers": {
+          "Authorization": "Bearer your-secret"
         }
       }
     }
@@ -168,10 +134,25 @@ claude mcp add mem0 \
 }
 ```
 
-**Verify installation:**
+#### Option 2: Claude Code CLI
+
 ```bash
-claude mcp list
-# Should show "mem0" in the list
+claude mcp add mem0 \
+  --transport http \
+  --url "http://<docker-host-ip>:3000/mcp"
+```
+
+#### Option 3: `.mcp.json` project file
+
+```json
+{
+  "mcpServers": {
+    "mem0": {
+      "type": "http",
+      "url": "http://<docker-host-ip>:3000/mcp"
+    }
+  }
+}
 ```
 
 ## Development
@@ -281,39 +262,37 @@ Replace the full mem0 Memory configuration (advanced use).
 
 ## Architecture
 
-This MCP server acts as a bridge between Claude Code and your self-hosted Mem0 API instance:
+This MCP server acts as a bridge between MCP clients (Claude Code, VS Code, etc.) and your self-hosted Mem0 API instance:
 
 ```
-┌─────────────────────────┐
-│     Claude Code         │
-└────────────┬────────────┘
-             │ MCP stdio protocol
-             │
-┌────────────▼────────────┐
-│   mem0-custom-mcp       │  ← This MCP server (Node.js)
-│   (MCP wrapper)         │
-└────────────┬────────────┘
-             │ HTTP REST API (localhost:8888 or custom URL)
-             │
-┌────────────▼────────────┐
-│  Self-Hosted Mem0 API   │  ← Mem0 API server (Python/FastAPI)
-│  (your-server:8888)     │    Handles memory operations
-└────────────┬────────────┘
-             │
-        ┌────┴─────┐
-        │          │
-   ┌────▼───┐  ┌──▼──────┐
-   │Qdrant  │  │  Neo4j  │  ← Databases managed by Mem0 API
-   │(Vector)│  │ (Graph) │
-   └────────┘  └─────────┘
+┌─────────────────────────────────────────┐
+│  MCP Client (VS Code / Claude Code)     │
+│  on any machine on the network          │
+└────────────────────┬────────────────────┘
+                     │ MCP HTTP Streamable (port 3000)
+                     │ POST/GET/DELETE http://<host>:3000/mcp
+┌────────────────────▼────────────────────┐
+│         mem0-custom-mcp                 │  ← This MCP server (Node.js, Docker)
+│     HTTP Streamable MCP Server          │    McpServer + StreamableHTTPServerTransport
+└────────────────────┬────────────────────┘
+                     │ HTTP REST API
+┌────────────────────▼────────────────────┐
+│       Self-Hosted Mem0 API              │  ← Mem0 API server (Python/FastAPI)
+│       (host.docker.internal:8888)       │    Handles memory operations
+└──────────────┬─────────────────┬────────┘
+               │                 │
+        ┌──────▼──────┐   ┌──────▼──────┐
+        │   Qdrant    │   │   Neo4j     │  ← Databases managed by Mem0 API
+        │  (Vector)   │   │   (Graph)   │
+        └─────────────┘   └─────────────┘
 ```
 
 **Flow:**
-1. Claude Code calls MCP tools (add_memory, search_memories, etc.)
-2. mem0-custom-mcp receives requests via MCP stdio protocol
-3. mem0-custom-mcp forwards to Mem0 API via HTTP
+1. MCP client connects to `http://<host>:3000/mcp` — the server creates a stateful session
+2. Client calls MCP tools (add_memory, search_memories, etc.) via HTTP POST
+3. mem0-custom-mcp forwards the request to the Mem0 API via HTTP
 4. Mem0 API processes requests and manages Qdrant/Neo4j databases
-5. Results flow back through the chain to Claude Code
+5. Results flow back through the chain to the MCP client
 
 **Note:** This server does NOT directly access Qdrant or Neo4j. It communicates only with the Mem0 API endpoint, which handles all database operations.
 
@@ -341,12 +320,23 @@ All endpoints are called with the `/v1/` prefix:
 
 ### Server won't start
 
-Check debug logs in `~/.claude/debug/` for error messages.
+Check container logs:
+```bash
+docker compose logs -f mem0-custom-mcp
+```
 
 Common issues:
-- Mem0 API not accessible (check VPN connection)
-- Invalid endpoint URL
-- Port conflicts
+- `MCP_PORT` already in use — change it in `.env`
+- Mem0 API not accessible — check `MEM0_API_URL` and network connectivity
+
+### Health check
+
+The server exposes a lightweight health endpoint that does **not** require authentication:
+
+```bash
+curl http://<docker-host-ip>:3000/health
+# {"status":"ok","sessions":0}
+```
 
 ### Connection timeout
 

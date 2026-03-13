@@ -6,6 +6,7 @@ services:
     environment:
       - MEM0_API_URL=${MEM0_API_URL:-http://host.docker.internal:8888}
       - DEFAULT_USER_ID=${DEFAULT_USER_ID:-default}
-    stdin_open: true
-    tty: false
+      - MCP_PORT=${MCP_PORT:-3000}
+    ports:
+      - "${MCP_PORT:-3000}:${MCP_PORT:-3000}"
     restart: unless-stopped
