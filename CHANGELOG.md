@@ -20,17 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `configure` — full mem0 config replacement (`POST /v1/configure`)
 - **`agent_id` and `run_id` scope support** on `add_memory`, `get_memories`, `search_memories`, and `delete_all_memories`
 - **`filters` parameter** on `search_memories` for metadata filtering
-
-### Fixed
-- `search_memories` was calling wrong endpoint `/v1/memories/search/` → corrected to `/v1/search`
-- `get_memories` was using user_id as a path parameter → corrected to use query parameters (`?user_id=...`)
+- **`MEM0_BEARER_TOKEN` env var** — when set, sent as `Authorization: Bearer <token>` on every HTTP request to the mem0 backend
+- **`MCP_AUTH_TOKEN` env var** — when set, every MCP tool call must supply a matching token in `_meta.auth_token`; unmatched calls are rejected with `Unauthorized`
+- **Structured JSON logging to stderr** — newline-delimited JSON log entries (with `ts`, `level`, `message`, `data`) for: server startup, every incoming tool call, every outgoing HTTP request, every HTTP response (with elapsed ms), and every error
 
 ### Changed
 - Updated `@modelcontextprotocol/sdk` from `^1.0.4` to `^1.27.1`
 - Replaced generic `Error` throws with standards-compliant `McpError` / `ErrorCode` from the MCP SDK
 - `callMem0API` helper now supports query-string parameters and handles empty-body responses
 - Server version bumped to `1.2.0`
-- README rewritten to document all 13 tools, correct endpoint table, and updated architecture diagram
+- README rewritten to document all 13 tools, endpoint table, env vars, logging, and updated architecture diagram
 
 ## [1.1.0] - 2025-11-09
 

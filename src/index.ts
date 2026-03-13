@@ -10,9 +10,31 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
-// Environment configuration
+// ── Environment configuration ─────────────────────────────────────────────────
 const MEM0_API_URL = process.env.MEM0_API_URL || "http://localhost:8888";
 const DEFAULT_USER_ID = process.env.DEFAULT_USER_ID || "default";
+
+// Bearer token sent as "Authorization: Bearer <token>" on every mem0 HTTP request.
+// Leave unset to disable.
+const MEM0_BEARER_TOKEN = process.env.MEM0_BEARER_TOKEN ?? "";
+
+// Token required from MCP clients in every tools/call request via _meta.auth_token.
+// Leave unset to disable.
+const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN ?? "";
+
+// ── Logger ────────────────────────────────────────────────────────────────────
+// NOTE: In stdio MCP mode stdout carries the JSON-RPC protocol stream.
+// Writing anything else to stdout would corrupt the protocol, so logs go to stderr.
+// Most container runtimes (Docker, Kubernetes) surface stderr in the same log stream.
+function log(level: "INFO" | "WARN" | "ERROR", message: string, data?: unknown): void {
+  const entry: Record<string, unknown> = {
+    ts: new Date().toISOString(),
+    level,
+    message,
+  };
+  if (data !== undefined) entry.data = data;
+  process.stderr.write(JSON.stringify(entry) + "\n");
+}
 
 // ── Zod schemas for input validation ─────────────────────────────────────────
 
@@ -90,11 +112,12 @@ async function callMem0API(
     url = `${url}?${qs}`;
   }
 
-  const options: RequestInit = {
-    method,
-    headers: { "Content-Type": "application/json" },
-  };
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (MEM0_BEARER_TOKEN) {
+    headers["Authorization"] = `Bearer ${MEM0_BEARER_TOKEN}`;
+  }
 
+  const options: RequestInit = { method, headers };
   if (body !== undefined) {
     options.body = JSON.stringify(body);
   }
@@ -103,12 +126,18 @@ async function callMem0API(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 120_000);
 
+  const start = Date.now();
+  log("INFO", "mem0 request", { method, url: endpoint, body: body ?? null });
+
   try {
     const response = await fetch(url, { ...options, signal: controller.signal });
     clearTimeout(timeoutId);
 
+    const elapsed = Date.now() - start;
+
     if (!response.ok) {
       const errorText = await response.text();
+      log("ERROR", "mem0 error response", { method, url: endpoint, status: response.status, elapsed, body: errorText });
       throw new McpError(
         ErrorCode.InternalError,
         `Mem0 API error (${response.status}): ${errorText}`
@@ -117,10 +146,14 @@ async function callMem0API(
 
     // Some endpoints return empty bodies (204 No Content style)
     const text = await response.text();
-    return text ? JSON.parse(text) : { message: "OK" };
+    const result = text ? JSON.parse(text) : { message: "OK" };
+    log("INFO", "mem0 response", { method, url: endpoint, status: response.status, elapsed });
+    return result;
   } catch (error) {
     clearTimeout(timeoutId);
     if (error instanceof McpError) throw error;
+    const elapsed = Date.now() - start;
+    log("ERROR", "mem0 call failed", { method, url: endpoint, elapsed, error: error instanceof Error ? error.message : String(error) });
     if (error instanceof Error) {
       throw new McpError(ErrorCode.InternalError, `Failed to call Mem0 API: ${error.message}`);
     }
@@ -294,6 +327,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
+  // ── MCP auth check ────────────────────────────────────────────────────────
+  if (MCP_AUTH_TOKEN) {
+    const provided = (request.params._meta as Record<string, unknown> | undefined)?.auth_token;
+    if (provided !== MCP_AUTH_TOKEN) {
+      log("WARN", "unauthorized tool call", { tool: name });
+      throw new McpError(ErrorCode.InvalidRequest, "Unauthorized: invalid or missing MCP auth token");
+    }
+  }
+
+  log("INFO", "tool call", { tool: name, args });
+
   try {
     switch (name) {
       // ── add_memory ─────────────────────────────────────────────────────────
@@ -311,7 +355,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         if (metadata) body.metadata = metadata;
 
-        const result = await callMem0API("/v1/memories", "POST", body);
+        const result = await callMem0API("/v1/memories/", "POST", body);
         return {
           content: [{ type: "text", text: `Memory added:\n${JSON.stringify(result, null, 2)}` }],
         };
@@ -320,12 +364,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // ── get_memories ───────────────────────────────────────────────────────
       case "get_memories": {
         const { user_id, agent_id, run_id } = GetMemoriesSchema.parse(args);
-        const params: Record<string, string> = {};
-        if (agent_id) params.agent_id = agent_id;
-        else if (run_id) params.run_id = run_id;
-        else params.user_id = user_id ?? DEFAULT_USER_ID;
-
-        const result = await callMem0API("/v1/memories", "GET", undefined, params);
+        // Use path param: GET /v1/memories/{userId}
+        const userId = agent_id ?? run_id ?? user_id ?? DEFAULT_USER_ID;
+        const result = await callMem0API(`/v1/memories/${userId}`);
         return {
           content: [
             {
@@ -358,7 +399,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (filters) body.filters = filters;
         if (limit) body.limit = limit;
 
-        const result = await callMem0API("/v1/search", "POST", body);
+        const result = await callMem0API("/v1/memories/search/", "POST", body);
         return {
           content: [{ type: "text", text: `Search results:\n${JSON.stringify(result, null, 2)}` }],
         };
@@ -456,8 +497,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   } catch (error) {
     if (error instanceof McpError) throw error;
     if (error instanceof z.ZodError) {
+      log("WARN", "invalid tool arguments", { tool: name, error: error.message });
       throw new McpError(ErrorCode.InvalidParams, `Invalid arguments: ${error.message}`);
     }
+    log("ERROR", "unhandled tool error", { tool: name, error: error instanceof Error ? error.message : String(error) });
     throw new McpError(
       ErrorCode.InternalError,
       error instanceof Error ? error.message : String(error)
@@ -471,13 +514,17 @@ async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  // stderr only — must not pollute the stdio MCP protocol stream
-  console.error("Mem0 Custom MCP Server running");
-  console.error(`API URL: ${MEM0_API_URL}`);
-  console.error(`Default User ID: ${DEFAULT_USER_ID}`);
+  // NOTE: In stdio MCP mode stdout is the JSON-RPC protocol stream.
+  // All logging goes to stderr so it does not corrupt the protocol.
+  log("INFO", "Mem0 Custom MCP Server running", {
+    api_url: MEM0_API_URL,
+    default_user_id: DEFAULT_USER_ID,
+    mem0_auth: MEM0_BEARER_TOKEN ? "enabled" : "disabled",
+    mcp_auth: MCP_AUTH_TOKEN ? "enabled" : "disabled",
+  });
 }
 
 main().catch((error) => {
-  console.error("Fatal error:", error);
+  log("ERROR", "Fatal error", { error: error instanceof Error ? error.message : String(error) });
   process.exit(1);
 });

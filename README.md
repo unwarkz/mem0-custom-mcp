@@ -60,8 +60,37 @@ npm install -g mem0-custom-mcp
 
 The server is configured via environment variables:
 
-- `MEM0_API_URL` - Your Mem0 API endpoint (default: `http://localhost:8888`)
-- `DEFAULT_USER_ID` - Default user ID for memory operations (default: `default`)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MEM0_API_URL` | `http://localhost:8888` | URL of your self-hosted Mem0 API |
+| `DEFAULT_USER_ID` | `default` | Fallback user ID when none is supplied in a tool call |
+| `MEM0_BEARER_TOKEN` | _(unset)_ | If set, sent as `Authorization: Bearer <token>` on every HTTP request to mem0 |
+| `MCP_AUTH_TOKEN` | _(unset)_ | If set, every MCP tool call must include a matching token in `_meta.auth_token`; calls without it are rejected with `Unauthorized` |
+
+**`MEM0_BEARER_TOKEN`** — authenticate this MCP server's requests to the mem0 backend.
+
+**`MCP_AUTH_TOKEN`** — protect this MCP server from unauthorised callers. When enabled, the calling MCP client must pass the token in `_meta`:
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "get_health",
+    "arguments": {},
+    "_meta": { "auth_token": "your-secret" }
+  }
+}
+```
+
+### Logging
+
+All log entries go to **stderr** as newline-delimited JSON:
+```json
+{"ts":"2026-03-13T12:00:00.000Z","level":"INFO","message":"tool call","data":{"tool":"add_memory","args":{...}}}
+{"ts":"2026-03-13T12:00:00.100Z","level":"INFO","message":"mem0 request","data":{"method":"POST","url":"/v1/memories/","body":{...}}}
+{"ts":"2026-03-13T12:00:01.200Z","level":"INFO","message":"mem0 response","data":{"method":"POST","url":"/v1/memories/","status":200,"elapsed":1100}}
+```
+
+> **Why stderr?** In stdio MCP mode stdout carries the JSON-RPC protocol stream. Writing arbitrary bytes to stdout would corrupt the protocol. Most container runtimes (Docker, Kubernetes, systemd) surface stderr in the same log stream as stdout.
 
 **Example configurations:**
 - Local: `http://localhost:8888`
@@ -294,10 +323,10 @@ All endpoints are called with the `/v1/` prefix:
 
 | Tool | Method | Endpoint |
 |------|--------|----------|
-| `add_memory` | POST | `/v1/memories` |
-| `get_memories` | GET | `/v1/memories?user_id=...` |
+| `add_memory` | POST | `/v1/memories/` |
+| `get_memories` | GET | `/v1/memories/{user_id}` |
 | `get_memory` | GET | `/v1/memories/{memory_id}` |
-| `search_memories` | POST | `/v1/search` |
+| `search_memories` | POST | `/v1/memories/search/` |
 | `update_memory` | PUT | `/v1/memories/{memory_id}` |
 | `get_memory_history` | GET | `/v1/memories/{memory_id}/history` |
 | `delete_memory` | DELETE | `/v1/memories/{memory_id}` |
